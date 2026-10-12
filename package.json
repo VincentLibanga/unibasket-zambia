@@ -1,0 +1,22 @@
+{
+  "name": "unibasket-task-3",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "UniBasket Task 3 product and category catalogue using Express and MySQL",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "db:setup": "node --env-file=.env database/setup.js",
+    "check": "node --check server.js && node --check db.js && node --check mail.js && node --check password-reset.js && node --check routes/password-resets.js && node --check routes/categories.js && node --check routes/products.js && node --check routes/payments.js && node --check database/setup.js && node --check public/script.js && node --check tools/send-test-email.js",
+    "test": "node --test tests/*.test.js",
+    "mail:test": "node --env-file=.env tools/send-test-email.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "mysql2": "^3.24.4",
+    "nodemailer": "^10.0.16"
+  }
+}
