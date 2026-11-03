@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { initiateZynlePayment, normalizeMobileNumber, requestZynlePay, ZYNLEPAY_SANDBOX_URL } from '../zynlepay.js';
+import { getZynlePaymentStatus, initiateZynlePayment, normalizeMobileNumber, requestZynlePay, ZYNLEPAY_SANDBOX_URL } from '../zynlepay.js';
 
 const config = () => ({ merchantId: 'MEC-TEST', apiId: 'test-id', apiKey: 'test-secret', apiUrl: ZYNLEPAY_SANDBOX_URL });
 const order = { reference: 'UBZ-TEST', phone: '097 000 0000', total: 80 };
@@ -61,6 +61,9 @@ test('credentials cannot be sent to production or a different host', async () =>
     await assert.rejects(requestZynlePay({}, {
       config: () => ({ ...config(), apiUrl }), fetchImpl: async () => { called = true; },
     }), { code: 'PAYMENT_ENVIRONMENT_INVALID' });
+    await assert.rejects(getZynlePaymentStatus(order, {
+      config: () => ({ ...config(), apiUrl }), fetchImpl: async () => { called = true; },
+    }), { code: 'PAYMENT_ENVIRONMENT_INVALID' });
   }
   assert.equal(called, false);
 });
@@ -69,4 +72,46 @@ test('a mismatched reference cannot update another checkout', async () => {
   await assert.rejects(initiateZynlePayment(order, { config, fetchImpl: async () => ({
     ok: true, json: async () => ({ response_code: 'PENDING-TEST', reference_no: 'DIFFERENT-REFERENCE' }),
   }) }), { code: 'PAYMENT_MISMATCH' });
+});
+
+test('status query uses the documented separate endpoint and flat credentials', async () => {
+  const result = await getZynlePaymentStatus(order, { config, fetchImpl: async (url, options) => {
+    assert.equal(url, ZYNLEPAY_SANDBOX_URL + '/paymentstatus');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.redirect, 'error');
+    assert.deepEqual(JSON.parse(options.body), {
+      api_id: 'test-id', api_key: 'test-secret', reference_no: 'UBZ-TEST',
+    });
+    return { ok: true, json: async () => ({ response_code: '995', message: "Could'nt complete payment", reference_no: 'UBZ-TEST' }) };
+  } });
+  assert.deepEqual(result, { reference: 'UBZ-TEST', status: 'pending', confirmationAvailable: false, gatewayCode: '995' });
+});
+
+test('undocumented status codes and messages never establish payment or leak credentials', async () => {
+  for (const response_code of ['120', 200, '00', 'SUCCESS', '2000']) {
+    const result = await getZynlePaymentStatus(order, { config, fetchImpl: async () => ({ ok: true, json: async () => ({
+      response_code, reference_no: order.reference, status: 'successful', amount: '80.00', currency: 'ZMW', message: 'test-secret',
+    }) }) });
+    assert.equal(result.status, 'pending');
+    assert.equal(result.confirmationAvailable, false);
+    assert.equal(JSON.stringify(result).includes('test-secret'), false);
+    assert.equal(result.amount, undefined);
+  }
+});
+
+test('status authentication errors do not establish that an initiated payment failed', async () => {
+  await assert.rejects(getZynlePaymentStatus(order, { config, fetchImpl: async () => ({ ok: true, json: async () => ({
+    response_code: '9902', reference_no: '00000000', message: 'test-secret',
+  }) }) }), error => error.code === 'PAYMENT_AUTH_FAILED' && !error.definite && !error.message.includes('test-secret'));
+});
+
+test('status query rejects mismatched references and malformed responses', async () => {
+  for (const [payload, code] of [
+    [{ response_code: '995', reference_no: 'ANOTHER-ORDER' }, 'PAYMENT_MISMATCH'],
+    [{ response_code: '995' }, 'PAYMENT_MISMATCH'],
+    [{ reference_no: order.reference }, 'PAYMENT_RESPONSE_INVALID'],
+    [[], 'PAYMENT_RESPONSE_INVALID'],
+  ]) {
+    await assert.rejects(getZynlePaymentStatus(order, { config, fetchImpl: async () => ({ ok: true, json: async () => payload }) }), { code });
+  }
 });

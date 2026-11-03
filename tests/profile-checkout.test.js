@@ -158,6 +158,21 @@ test('transaction-initiated status shows its reference without confirming the or
   assert.equal(context.pendingPayment.paymentRef, '1234567890');
 });
 
+test('status code 995 stays unconfirmed and a second check does not submit another payment', async () => {
+  const { elements, context, calls } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', {
+    statuses: ['pending'], confirmationAvailable: false, gatewayCode: '995', gatewayTransactionId: '1234567890',
+  });
+  assert.equal(elements.checkoutSuccess.hidden, true);
+  assert.equal(context.cart.length, 1);
+  assert.match(elements.paymentStatus.textContent, /could not confirm completion.*995/);
+  assert.equal(elements.checkoutSubmit.textContent, 'Check payment status');
+  await vm.runInNewContext(`${functionSource('submitCheckout')}\nsubmitCheckout();`, context);
+  assert.equal(calls.filter(url => url.endsWith('/checkout')).length, 1);
+  assert.equal(calls.filter(url => url.endsWith('/initiate')).length, 1);
+  assert.equal(calls.filter(url => url.endsWith('/verify')).length, 2);
+  assert.equal(context.cart.length, 1);
+});
+
 test('ambiguous initiation error preserves the reference and basket for status recovery', async () => {
   const { elements, context, storage } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', { initiationNetworkFailure: true });
   assert.equal(context.cart.length, 1);

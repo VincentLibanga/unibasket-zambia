@@ -17,7 +17,7 @@ This submission implements Task 3: insert and display products and categories. I
 - Route-based marketplace views for Home, Products, Categories, Account, Seller and Basket
 - MySQL schema, repeatable seed data and setup command
 
-Buyer and seller accounts and listings remain browser-only demonstrations. Checkout submits mobile-money requests to ZynlePay's sandbox through the Node.js server. Payment confirmation still requires the provider's status/callback contract, so an accepted request stays pending. During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Checkout requires sign-in and uses that profile name on the order confirmation. Seller listings are saved in the current browser and appear in the catalogue for that browser; a shared database seller catalogue can be added in a later backend milestone.
+Buyer and seller accounts and listings remain browser-only demonstrations. Checkout submits mobile-money requests and queries their status through ZynlePay's sandbox using the Node.js server. Final payment confirmation still requires documented success responses, so an unconfirmed request stays pending. During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Checkout requires sign-in and uses that profile name on the order confirmation. Seller listings are saved in the current browser and appear in the catalogue for that browser; a shared database seller catalogue can be added in a later backend milestone.
 
 The catalogue images are stored in `public/images/products`, so they display without a live image service. Fifty-two user-supplied AI-generated images have been matched to catalogue items and resized for web display. The remaining items retain representative licensed photos. The UniBasket product brand names are fictional; images illustrate the product type and do not claim to show that exact brand or package. Image provenance and available license details are listed in `PHOTO_CREDITS.md` and linked from the website footer. Sellers can upload a photo when publishing a listing; their listing and its photo are stored only in the current browser.
 
@@ -82,7 +82,7 @@ ZYNLEPAY_SANDBOX_API_ID=your-sandbox-api-id
 ZYNLEPAY_SANDBOX_API_KEY=your-sandbox-api-key
 ```
 
-Restart `npm start`, open the same localhost address where you registered, add a product, sign in, and choose **Pay with ZynlePay**. Use a number configured in your own sandbox simulator. Local `07`/`09` numbers and `+260` numbers are normalized to `260` followed by the nine-digit mobile number. No test phone numbers or real credentials are committed to this repository.
+Restart `npm start`, open the same localhost address where you registered, add a product, sign in, and choose **Pay with ZynlePay**. Use a number configured in your own sandbox simulator. Open **Simulator** in the ZynlePay dashboard to respond to the payment prompt using its test PIN. The observed sandbox prompt appeared in that browser simulator; a real handset prompt has not been verified. Local `07`/`09` numbers and `+260` numbers are normalized to `260` followed by the nine-digit mobile number. No test phone numbers or real credentials are committed to this repository.
 
 If a sandbox key is regenerated in ZynlePay, update `ZYNLEPAY_SANDBOX_API_KEY` in `.env` and restart the app. The old key will not authenticate.
 
@@ -115,11 +115,23 @@ ZynlePay response `2000` (no active simulator) and `9902` (wrong API credentials
 
 A real sandbox request with the updated key returned `120` (`Transaction is initiated`) and a numeric transaction ID. The service retains that ID and displays it alongside the order reference while keeping the payment pending. This response does not establish a completed payment.
 
-The successful response codes and status-query/callback schema have not yet been supplied or verified. Consequently the default service leaves accepted or unknown responses pending, sends no receipt, and does not claim a successful order. `POST /api/payments/verify` reports stored state and `confirmationAvailable: false`; it does not yet query ZynlePay. The checkout directs the tester to the sandbox dashboard before retrying. There is no active webhook route and no guessed callback payload is trusted.
+`POST /api/payments/verify` now queries the documented sandbox status endpoint, `https://sandbox.zynlepay.com/zynlepay/jsonapi/paymentstatus`, using this separate, flat request body:
+
+```json
+{
+  "api_id": "from local environment",
+  "api_key": "from local environment",
+  "reference_no": "saved checkout reference"
+}
+```
+
+The existing ZMW 1 test returned `response_code: "995"`, `message: "Could'nt complete payment"`, and its matching `reference_no`. This does not confirm success. The supplied Payment Status documentation does not define terminal response codes or a successful response containing the independently verified amount and currency. Until those details are verified, the adapter keeps all status responses unconfirmed (`status: "pending"`, `confirmationAvailable: false`), sends no receipt, and never retries initiation. The frontend displays code 995 with a completion-unconfirmed message. Each subsequent **Check payment status** queries the same saved reference again, and concurrent checks share one provider request. Arbitrary provider messages and credentials are not forwarded to the browser.
+
+There is no active webhook route and no guessed callback payload is trusted. Status queries do not depend on receiving a callback.
 
 The callback fields shown in the ZynlePay settings must eventually use a publicly reachable HTTPS endpoint for this application. A `localhost` value cannot deliver server-to-server callbacks to a developer's computer. Configure that endpoint only after the callback format and authentication are implemented; exposing the entire development app is not required.
 
-The service has a tested confirmation hook for a future status adapter. When that adapter is implemented from the provider's contract, it must independently verify the reference, ZMW currency and full amount before confirming the order or emailing a receipt. Concurrent confirmations must reuse the same result and send only one receipt. Receipt email failure must not undo a verified payment.
+The service has a tested confirmation hook for verified terminal responses. Once the provider's response contract is known, the adapter must independently verify the reference, ZMW currency and full amount before confirming the order or emailing a receipt. Concurrent confirmations reuse the same result and send only one receipt. Receipt email failure does not undo a verified payment.
 
 This remains a sandbox demonstration: accounts and seller prices originate in browser storage, and checkout snapshots are kept in server memory for up to 24 hours. Server restarts clear them; check the sandbox dashboard before repeating an interrupted payment. Live payments require server-owned accounts, catalogue pricing and durable order storage. The integration cannot process live payments.
 

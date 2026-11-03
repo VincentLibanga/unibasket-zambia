@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createPaymentService } from '../payments.js';
-import { PaymentError } from '../zynlepay.js';
+import { getZynlePaymentStatus, PaymentError, ZYNLEPAY_SANDBOX_URL } from '../zynlepay.js';
 
 const input = {
   name: 'Vince Buyer', email: 'buyer@example.test', phone: '097 000 0000',
@@ -88,6 +88,49 @@ test('initiation and verification require the private checkout token', async () 
   await assert.rejects(service.initiate(checkout.reference, '0'.repeat(64)), { code: 'PAYMENT_NOT_FOUND' });
   await assert.rejects(service.verify(checkout.reference, null), { code: 'PAYMENT_NOT_FOUND' });
   assert.equal(requests.length, 0);
+});
+
+test('status checks retain code 995 without sending a receipt or resubmitting', async () => {
+  let queries = 0;
+  const { service, receipts, requests } = serviceWith({
+    getStatus: order => getZynlePaymentStatus(order, {
+      config: () => ({ apiId: 'test-id', apiKey: 'test-secret', apiUrl: ZYNLEPAY_SANDBOX_URL }),
+      fetchImpl: async (_url, options) => {
+        queries++;
+        const body = JSON.parse(options.body);
+        assert.equal(body.reference_no, order.reference);
+        return { ok: true, json: async () => ({ response_code: '995', reference_no: order.reference, message: 'test-secret' }) };
+      },
+    }),
+  });
+  const checkout = await started(service);
+  const results = await Promise.all([
+    service.verify(checkout.reference, checkout.token), service.verify(checkout.reference, checkout.token),
+  ]);
+  assert.deepEqual(results[0], { status: 'pending', confirmationAvailable: false, gatewayCode: '995' });
+  assert.equal(queries, 1);
+  await service.verify(checkout.reference, checkout.token);
+  assert.equal(queries, 2);
+  await service.initiate(checkout.reference, checkout.token);
+  assert.equal(requests.length, 1);
+  assert.equal(receipts.length, 0);
+});
+
+test('pending status updates retain the original transaction ID', async () => {
+  const { service } = serviceWith({
+    initiatePayment: async order => ({ response_code: '120', reference_no: order.reference, transaction_id: 1234567890 }),
+    getStatus: async order => ({ reference: order.reference, status: 'pending', confirmationAvailable: false, gatewayCode: '995' }),
+  });
+  const checkout = await started(service);
+  assert.deepEqual(await service.verify(checkout.reference, checkout.token), {
+    status: 'pending', confirmationAvailable: false, gatewayCode: '995', paymentRef: '1234567890',
+  });
+});
+
+test('a pending status from another reference cannot update the checkout', async () => {
+  const { service } = serviceWith({ getStatus: async () => ({ reference: 'ANOTHER-ORDER', status: 'pending', gatewayCode: '995' }) });
+  const checkout = await started(service);
+  await assert.rejects(service.verify(checkout.reference, checkout.token), { code: 'PAYMENT_MISMATCH' });
 });
 
 test('duplicate and concurrent initiation requests submit one gateway charge', async () => {
