@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --env-file=.env server.js",
     "db:setup": "node --env-file=.env database/setup.js",
-    "check": "node --check server.js && node --check db.js && node --check mail.js && node --check password-reset.js && node --check routes/password-resets.js && node --check routes/categories.js && node --check routes/products.js && node --check routes/payments.js && node --check database/setup.js && node --check public/script.js && node --check tools/send-test-email.js",
+    "check": "node --check server.js && node --check db.js && node --check mail.js && node --check zynlepay.js && node --check payments.js && node --check password-reset.js && node --check routes/password-resets.js && node --check routes/categories.js && node --check routes/products.js && node --check routes/payments.js && node --check database/setup.js && node --check public/script.js && node --check tools/send-test-email.js",
     "test": "node --test tests/*.test.js",
     "mail:test": "node --env-file=.env tools/send-test-email.js"
   },

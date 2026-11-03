@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const script = await readFile(new URL('../public/script.js', import.meta.url), 'utf8');
 
 function functionSource(name) {
-  let start = script.search(new RegExp(`function\\s+${name}\\s*\\(\\)\\s*\\{`));
+  let start = script.search(new RegExp(`function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`));
   assert.notEqual(start, -1, `${name} should exist`);
   if (script.slice(start - 6, start) === 'async ') start -= 6;
   const end = script.indexOf('\n}\n', start);
@@ -14,37 +14,68 @@ function functionSource(name) {
   return script.slice(start, end + 2);
 }
 
-async function checkoutScenario(currentUser, enteredName) {
+async function checkoutScenario(currentUser, enteredName, {
+  statuses = ['successful'], initiateStatus = 'pending', confirmationAvailable = true, initiationNetworkFailure = false,
+  gatewayCode, gatewayTransactionId,
+} = {}) {
   const elements = Object.fromEntries([
     'checkoutError', 'checkoutName', 'confirmationName', 'orderId', 'paymentRef',
     'paymentMethodPaid', 'orderTotal', 'receiptStatus', 'checkoutForm', 'checkoutSuccess',
-    'count', 'checkoutSubmit', 'checkoutPhone', 'paymentMethod', 'deliveryMethod', 'deliveryNote'
+    'count', 'checkoutSubmit', 'checkoutPhone', 'paymentMethod', 'deliveryMethod', 'deliveryNote', 'paymentStatus'
   ].map(id => [id, { textContent: '', hidden: false, value: '' }]));
   elements.checkoutName.value = enteredName;
   elements.checkoutName.focus = () => {};
-  elements.paymentMethod.value = 'mtn_momo';
+  elements.paymentMethod.value = 'mobile_money';
   let sentBody;
+  const calls = [];
+  const storage = new Map();
+  let verificationCount = 0;
   const context = {
     currentUser,
+    pendingPayment: null,
+    checkoutBusy: false,
     cart: [{ i: 0, q: 1 }],
-    products: [['Oats', 'Groceries', 65]],
+    products: [['Oats', 'Groceries', 65, '', '', '', '', 1]],
+    AbortSignal,
+    setTimeout: callback => { callback(); },
+    sessionStorage: { setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     document: {
       getElementById: id => elements[id],
-      querySelector: () => ({ value: 'SUCCESS' })
+      querySelectorAll: () => ['checkoutName', 'checkoutPhone', 'paymentMethod', 'deliveryMethod', 'deliveryNote'].map(id => elements[id]),
     },
-    fetch: async (_url, options) => {
-      sentBody = JSON.parse(options.body);
+    fetch: async (url, options) => {
+      calls.push(url);
+      if (url.endsWith('/checkout')) {
+        sentBody = JSON.parse(options.body);
+        return { ok: true, json: async () => ({ data: {
+          reference: 'UBZ-TEST', token: 'a'.repeat(64), name: currentUser.name, email: currentUser.email,
+          amount: 80, currency: 'ZMW', status: 'created',
+        } }) };
+      }
+      if (url.endsWith('/initiate')) {
+        if (initiationNetworkFailure) throw new Error('Connection lost');
+        return { ok: true, json: async () => ({ data: {
+          status: initiateStatus, confirmationAvailable, gatewayCode, paymentRef: gatewayTransactionId,
+          code: initiateStatus === 'failed' ? 'PAYMENT_AUTH_FAILED' : undefined,
+          message: initiateStatus === 'failed' ? 'ZynlePay rejected the shop’s sandbox credentials.' : undefined,
+        } }) };
+      }
+      const status = statuses[Math.min(verificationCount++, statuses.length - 1)];
       return {
         ok: true,
         json: async () => ({ data: {
-          orderId: 'UBZ-TEST', paymentRef: 'DEMO-TEST', paymentMethod: 'MTN MoMo', total: 80, emailSent: true
+          status, confirmationAvailable, gatewayCode, name: currentUser.name, email: currentUser.email,
+          orderId: 'UBZ-TEST', paymentRef: gatewayTransactionId || 'ZYNLEPAY-TEST', paymentMethod: 'Mobile money via ZynlePay', total: 80, emailSent: true
         } })
       };
     },
     renderBasket: () => {}
   };
-  await vm.runInNewContext(`${functionSource('submitCheckout')}\nsubmitCheckout();`, context);
-  return { elements, sentBody };
+  elements.checkoutSuccess.hidden = true;
+  const functions = ['submitCheckout', 'paymentApi', 'setCheckoutBusy', 'showPaymentStatus',
+    'savePendingPayment', 'confirmZynlePayment', 'applyPaymentResult', 'showCheckoutConfirmation'].map(functionSource).join('\n');
+  await vm.runInNewContext(`${functions}\nsubmitCheckout();`, context);
+  return { elements, sentBody, calls, context, storage };
 }
 
 function guestCheckoutAttempt() {
@@ -75,8 +106,64 @@ test('order confirmation uses the signed-in profile name', async () => {
   assert.equal(elements.confirmationName.textContent, 'Thank you, Vince Buyer.');
   assert.equal(elements.checkoutSuccess.hidden, false);
   assert.equal(elements.orderTotal.textContent, 'ZMW 80');
-  assert.equal(elements.paymentMethodPaid.textContent, 'MTN MoMo');
+  assert.equal(elements.paymentMethodPaid.textContent, 'Mobile money via ZynlePay');
   assert.match(elements.receiptStatus.textContent, /receipt has been emailed to buyer@example.test/);
+});
+
+test('ZynlePay checkout waits for server verification before showing success', async () => {
+  const { calls, sentBody, context } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', { statuses: ['pending', 'successful'] });
+  assert.deepEqual(calls, ['/api/payments/checkout', '/api/payments/initiate', '/api/payments/verify', '/api/payments/verify']);
+  assert.equal('outcome' in sentBody, false);
+  assert.equal(context.cart.length, 0);
+  assert.equal(context.pendingPayment, null);
+});
+
+test('pending ZynlePay payment preserves the basket and offers a status check', async () => {
+  const { elements, context, storage } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', { statuses: ['pending'] });
+  assert.equal(context.cart.length, 1);
+  assert.equal(elements.checkoutSuccess.hidden, true);
+  assert.equal(elements.checkoutSubmit.textContent, 'Check payment status');
+  assert.equal(elements.checkoutPhone.disabled, true);
+  assert.equal(storage.size, 1);
+});
+
+test('declined and rejected credentials keep the basket and allow retry', async () => {
+  for (const scenario of [{ statuses: ['failed'] }, { initiateStatus: 'failed' }]) {
+    const { elements, context, storage } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', scenario);
+    assert.equal(context.cart.length, 1);
+    assert.equal(elements.checkoutSuccess.hidden, true);
+    assert.equal(elements.checkoutError.hidden, false);
+    assert.equal(elements.checkoutSubmit.textContent, 'Pay with ZynlePay');
+    assert.equal(elements.checkoutPhone.disabled, false);
+    assert.equal(storage.size, 0);
+  }
+});
+
+test('a submitted request stays pending when gateway confirmation is unavailable', async () => {
+  const { elements, context, calls } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', { statuses: ['pending'], confirmationAvailable: false });
+  assert.equal(context.cart.length, 1);
+  assert.equal(elements.checkoutSuccess.hidden, true);
+  assert.equal(calls.filter(url => url.endsWith('/verify')).length, 1);
+  assert.match(elements.paymentStatus.textContent, /sandbox dashboard before paying again/);
+});
+
+test('transaction-initiated status shows its reference without confirming the order', async () => {
+  const { elements, context } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', {
+    statuses: ['pending'], confirmationAvailable: false, gatewayCode: '120', gatewayTransactionId: '1234567890',
+  });
+  assert.equal(context.cart.length, 1);
+  assert.equal(elements.checkoutSuccess.hidden, true);
+  assert.match(elements.paymentStatus.textContent, /initiated the test request\. Confirmation is pending/);
+  assert.match(elements.paymentStatus.textContent, /Transaction: 1234567890/);
+  assert.equal(context.pendingPayment.paymentRef, '1234567890');
+});
+
+test('ambiguous initiation error preserves the reference and basket for status recovery', async () => {
+  const { elements, context, storage } = await checkoutScenario({ name: 'Vince Buyer', email: 'buyer@example.test' }, '', { initiationNetworkFailure: true });
+  assert.equal(context.cart.length, 1);
+  assert.equal(elements.checkoutSuccess.hidden, true);
+  assert.equal(storage.size, 1);
+  assert.equal(elements.checkoutSubmit.textContent, 'Check payment status');
 });
 
 test('guest payment is blocked until an account is created', () => {

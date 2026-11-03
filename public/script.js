@@ -670,6 +670,8 @@ const SELLER_PRODUCT_STORE = "unibasket.sellerProducts.v1";
 let catalogueProducts = fallbackProducts;
 let products = fallbackProducts;
 let cart = [];
+let checkoutBusy = false;
+let pendingPayment = readPendingPayment();
 
 function readSellerProducts() {
   try {
@@ -888,7 +890,7 @@ function deliveryCharge() {
 }
 
 function openCheckout() {
-  if (!cart.length) {
+  if (!cart.length && !pendingPayment) {
     closeBasket();
     showToast("Add at least one product before checkout.");
     return;
@@ -905,13 +907,17 @@ function openCheckout() {
   document.getElementById("checkoutForm").hidden = false;
   document.getElementById("checkoutSuccess").hidden = true;
   document.getElementById("checkoutError").hidden = true;
+  document.getElementById("paymentStatus").hidden = true;
   const nameInput = document.getElementById("checkoutName");
   nameInput.value = currentUser?.name || "";
   nameInput.readOnly = Boolean(currentUser);
   updateCheckoutTotal();
+  setCheckoutBusy(false);
+  if (pendingPayment) showPaymentStatus("A test payment is awaiting confirmation. Check its status before paying again.");
 }
 
 function closeCheckout() {
+  if (checkoutBusy) return;
   document.getElementById("checkoutModal").hidden = true;
   document.body.classList.remove("shopping-open");
 }
@@ -947,51 +953,155 @@ async function submitCheckout() {
     document.getElementById("checkoutName").focus();
     return;
   }
-  const submit = document.getElementById("checkoutSubmit");
   error.hidden = true;
-  submit.disabled = true;
-  submit.textContent = "Processing test payment…";
-  let response,
-    payload = {};
+  setCheckoutBusy(true);
   try {
-    response = await fetch("/api/demo-payments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: currentUser.email,
-        name: buyerName,
-        phone: document.getElementById("checkoutPhone").value,
-        paymentMethod: document.getElementById("paymentMethod").value,
-        deliveryMethod: document.getElementById("deliveryMethod").value,
-        deliveryNote: document.getElementById("deliveryNote").value,
-        outcome: document.querySelector('input[name="paymentOutcome"]:checked')
-          .value,
-        items: cart.map((item) => ({
-          name: products[item.i][0],
-          price: products[item.i][2],
-          quantity: item.q,
-        })),
-      }),
+    if (pendingPayment && pendingPayment.email !== currentUser.email) {
+      throw new Error("Sign in with the account used for the pending test payment to check its status.");
+    }
+    if (pendingPayment) {
+      await confirmZynlePayment();
+      return;
+    }
+    showPaymentStatus("Preparing your ZynlePay test payment…");
+    const basket = cart.map(item => ({ id: products[item.i][7], quantity: item.q }));
+    const checkout = await paymentApi("/checkout", {
+      email: currentUser.email,
+      name: buyerName,
+      phone: document.getElementById("checkoutPhone").value,
+      paymentMethod: document.getElementById("paymentMethod").value,
+      deliveryMethod: document.getElementById("deliveryMethod").value,
+      deliveryNote: document.getElementById("deliveryNote").value,
+      items: cart.map((item) => ({
+        name: products[item.i][0],
+        price: products[item.i][2],
+        quantity: item.q,
+      })),
     });
-    payload = await response.json().catch(() => ({}));
-  } catch {
-    response = null;
-  } finally {
-    submit.disabled = false;
-    submit.textContent = "Submit test payment";
-  }
-  if (!response || !response.ok) {
-    error.textContent =
-      payload.error?.message ||
-      (response
-        ? "The payment could not be processed. Open the site through the UniBasket server (npm start)."
-        : "The payment could not be processed because the UniBasket server is not reachable. Start it with npm start.");
+    pendingPayment = {
+      reference: checkout.reference, token: checkout.token,
+      name: checkout.name, email: checkout.email, items: basket,
+    };
+    savePendingPayment();
+    showPaymentStatus("Submitting your mobile-money test request to ZynlePay…");
+    const result = await paymentApi("/initiate", { reference: pendingPayment.reference, token: pendingPayment.token });
+    if (!applyPaymentResult(result)) await confirmZynlePayment();
+  } catch (failure) {
+    error.textContent = failure.message || "The payment could not be completed. Check its status before trying again.";
     error.hidden = false;
-    return;
+  } finally {
+    setCheckoutBusy(false);
   }
-  const order = payload.data;
+}
+
+function readPendingPayment() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem("unibasket.zynlepay.pending.v1"));
+    return value && /^UBZ-[A-F0-9]{32}$/.test(value.reference) && /^[a-f0-9]{64}$/.test(value.token) &&
+      typeof value.email === "string" && Array.isArray(value.items) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingPayment() {
+  try {
+    if (pendingPayment) sessionStorage.setItem("unibasket.zynlepay.pending.v1", JSON.stringify(pendingPayment));
+    else sessionStorage.removeItem("unibasket.zynlepay.pending.v1");
+  } catch {
+    // The in-memory reference still allows verification if browser storage is unavailable.
+  }
+}
+
+function showPaymentStatus(message) {
+  const status = document.getElementById("paymentStatus");
+  status.textContent = message;
+  status.hidden = false;
+}
+
+function setCheckoutBusy(busy) {
+  checkoutBusy = busy;
+  const submit = document.getElementById("checkoutSubmit");
+  submit.disabled = busy;
+  submit.textContent = busy ? "Checking payment…" : pendingPayment ? "Check payment status" : "Pay with ZynlePay";
+  document.querySelectorAll("#checkoutForm input, #checkoutForm select").forEach(input => {
+    input.disabled = busy || Boolean(pendingPayment);
+  });
+}
+
+async function paymentApi(path, body) {
+  let response;
+  try {
+    response = await fetch("/api/payments" + path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      signal: AbortSignal.timeout(45000),
+    });
+  } catch {
+    throw new Error("The payment server could not be reached. Check payment status before starting another payment.");
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || "The payment server could not complete this request. Open the site through the UniBasket server.");
+    error.code = payload.error?.code;
+    throw error;
+  }
+  return payload.data;
+}
+
+function applyPaymentResult(order) {
+  if (pendingPayment && order.paymentRef) {
+    pendingPayment.paymentRef = order.paymentRef;
+    savePendingPayment();
+  }
+  if (order.status === "successful") {
+    showCheckoutConfirmation(order);
+    return true;
+  }
+  if (order.status === "failed") {
+    pendingPayment = null;
+    savePendingPayment();
+    document.getElementById("paymentStatus").hidden = true;
+    throw new Error(order.message || "The test payment was declined. Your basket is unchanged.");
+  }
+  return false;
+}
+
+async function confirmZynlePayment() {
+  showPaymentStatus("Checking your test payment…");
+  for (let attempt = 0; attempt < 8; attempt++) {
+    let order;
+    try {
+      order = await paymentApi("/verify", { reference: pendingPayment.reference, token: pendingPayment.token });
+    } catch (error) {
+      if (error.code === "PAYMENT_NOT_FOUND") {
+        pendingPayment = null;
+        savePendingPayment();
+      }
+      throw error;
+    }
+    if (order.status === "created") {
+      order = await paymentApi("/initiate", { reference: pendingPayment.reference, token: pendingPayment.token });
+    }
+    if (applyPaymentResult(order)) return;
+    if (order.confirmationAvailable === false) {
+      const transaction = order.paymentRef ? " Transaction: " + order.paymentRef + "." : "";
+      const progress = order.gatewayCode === "995"
+        ? "ZynlePay could not confirm completion of this test payment (code 995). Your order is awaiting confirmation."
+        : order.gatewayCode === "120"
+          ? "ZynlePay has initiated the test request. Confirmation is pending."
+          : "ZynlePay has not confirmed this test payment.";
+      showPaymentStatus(progress + transaction + " Check your ZynlePay sandbox dashboard before paying again. Reference: " + pendingPayment.reference);
+      return;
+    }
+    if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  showPaymentStatus("Your test payment is still pending. Use Check payment status before paying again. Reference: " + pendingPayment.reference);
+}
+
+function showCheckoutConfirmation(order) {
+  const paidItems = pendingPayment?.items || [];
   document.getElementById("confirmationName").textContent =
-    "Thank you, " + buyerName + ".";
+    "Thank you, " + order.name + ".";
   document.getElementById("orderId").textContent = order.orderId;
   document.getElementById("paymentRef").textContent = order.paymentRef;
   document.getElementById("paymentMethodPaid").textContent =
@@ -999,12 +1109,18 @@ async function submitCheckout() {
   document.getElementById("orderTotal").textContent =
     "ZMW " + order.total.toLocaleString();
   document.getElementById("receiptStatus").textContent = order.emailSent
-    ? "A receipt has been emailed to " + currentUser.email + "."
+    ? "A receipt has been emailed to " + order.email + "."
     : "Your order is confirmed, but the receipt email could not be sent.";
   document.getElementById("checkoutForm").hidden = true;
   document.getElementById("checkoutSuccess").hidden = false;
-  cart = [];
-  document.getElementById("count").textContent = "0";
+  cart = cart.flatMap(item => {
+    const paid = paidItems.find(line => line.id === products[item.i][7]);
+    const quantity = Math.max(0, item.q - (paid?.quantity || 0));
+    return quantity ? [{ ...item, q: quantity }] : [];
+  });
+  pendingPayment = null;
+  savePendingPayment();
+  document.getElementById("count").textContent = String(cart.reduce((sum, item) => sum + item.q, 0));
   renderBasket();
 }
 

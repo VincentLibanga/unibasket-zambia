@@ -17,7 +17,7 @@ This submission implements Task 3: insert and display products and categories. I
 - Route-based marketplace views for Home, Products, Categories, Account, Seller and Basket
 - MySQL schema, repeatable seed data and setup command
 
-The buyer account, basket and checkout panels remain browser-only demonstrations. During registration, a user selects either Buyer account or Seller account. The account page shows that account's profile and lets the user correct the displayed name. A signed-in user's saved profile name appears on a successful order confirmation; a guest enters a name at checkout. Seller listings are saved in the current browser and appear in the catalogue for that browser; a shared database seller catalogue can be added in a later backend milestone.
+Buyer and seller accounts and listings remain browser-only demonstrations. Checkout submits mobile-money requests to ZynlePay's sandbox through the Node.js server. Payment confirmation still requires the provider's status/callback contract, so an accepted request stays pending. During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Checkout requires sign-in and uses that profile name on the order confirmation. Seller listings are saved in the current browser and appear in the catalogue for that browser; a shared database seller catalogue can be added in a later backend milestone.
 
 The catalogue images are stored in `public/images/products`, so they display without a live image service. Fifty-two user-supplied AI-generated images have been matched to catalogue items and resized for web display. The remaining items retain representative licensed photos. The UniBasket product brand names are fictional; images illustrate the product type and do not claim to show that exact brand or package. Image provenance and available license details are listed in `PHOTO_CREDITS.md` and linked from the website footer. Sellers can upload a photo when publishing a listing; their listing and its photo are stored only in the current browser.
 
@@ -67,9 +67,61 @@ Accounts still live in browser storage: use the same browser and site address wh
 
 If you originally registered by opening `public/index.html` as a `file:///` URL, reopen that exact file in the same browser and refresh it. Click **Move saved accounts** in the account panel. This opens the running app at `http://127.0.0.1:4176/` and copies your accounts and seller listings into its browser storage. Existing destination accounts are preserved, and the original file-preview data is retained. The new tab opens the password reset form with the transferred email filled in. The transfer stays between the two browser tabs; it does not upload account records to the server.
 
-## Demo payments
+## ZynlePay sandbox payments
 
-Checkout sends a demonstration payment to `POST /api/demo-payments`. The buyer chooses MTN MoMo, Airtel Money, Zamtel Kwacha or a test card, plus an outcome: approve, decline or cancel. On approval, the server creates the order and payment references, calculates the total including delivery, and emails a receipt through the same Gmail SMTP setup as the account confirmation email. No real payment is processed and no card or mobile money details are collected.
+Checkout submits mobile-money requests using the supplied `runBillPayment` JSON contract. The manual approve, decline and cancel controls have been removed. Card testing is disabled until its request/redirect contract is available.
+
+### Configuration
+
+Create a [ZynlePay sandbox account](https://sandbox.zynlepay.com/register), enable a mobile-money simulator for a test phone number, and put the matching sandbox credentials in the ignored local `.env`:
+
+```dotenv
+ZYNLEPAY_SANDBOX_API_URL=https://sandbox.zynlepay.com/zynlepay/jsonapi
+ZYNLEPAY_SANDBOX_MERCHANT_CODE=your-merchant-code
+ZYNLEPAY_SANDBOX_API_ID=your-sandbox-api-id
+ZYNLEPAY_SANDBOX_API_KEY=your-sandbox-api-key
+```
+
+Restart `npm start`, open the same localhost address where you registered, add a product, sign in, and choose **Pay with ZynlePay**. Use a number configured in your own sandbox simulator. Local `07`/`09` numbers and `+260` numbers are normalized to `260` followed by the nine-digit mobile number. No test phone numbers or real credentials are committed to this repository.
+
+If a sandbox key is regenerated in ZynlePay, update `ZYNLEPAY_SANDBOX_API_KEY` in `.env` and restart the app. The old key will not authenticate.
+
+The server accepts only the sandbox URL above, optionally with a trailing slash. A production URL or different host is rejected before credentials can be sent. The API key and API ID remain on the server.
+
+The outgoing request is:
+
+```json
+{
+  "auth": {
+    "merchant_id": "from local environment",
+    "api_id": "from local environment",
+    "api_key": "from local environment",
+    "channel": "momo"
+  },
+  "data": {
+    "method": "runBillPayment",
+    "sender_id": "260XXXXXXXXX",
+    "reference_no": "unique checkout reference",
+    "amount": "total including delivery, in ZMW"
+  }
+}
+```
+
+### Request handling and confirmation limits
+
+`POST /api/payments/checkout` validates and snapshots the basket, calculates delivery, and returns a unique reference and private verification token before any gateway submission. The browser saves that reference in session storage, then calls `POST /api/payments/initiate`. Concurrent and repeated initiation requests submit only one charge for the same reference. A timeout retains the pending reference and never resubmits the charge automatically.
+
+ZynlePay response `2000` (no active simulator) and `9902` (wrong API credentials) are handled as definite failures. Checkout preserves the basket and shows clear feedback. These are gateway responses; an HTTP 200 alone never confirms payment. A missing simulator response may occur before authentication is checked.
+
+A real sandbox request with the updated key returned `120` (`Transaction is initiated`) and a numeric transaction ID. The service retains that ID and displays it alongside the order reference while keeping the payment pending. This response does not establish a completed payment.
+
+The successful response codes and status-query/callback schema have not yet been supplied or verified. Consequently the default service leaves accepted or unknown responses pending, sends no receipt, and does not claim a successful order. `POST /api/payments/verify` reports stored state and `confirmationAvailable: false`; it does not yet query ZynlePay. The checkout directs the tester to the sandbox dashboard before retrying. There is no active webhook route and no guessed callback payload is trusted.
+
+The callback fields shown in the ZynlePay settings must eventually use a publicly reachable HTTPS endpoint for this application. A `localhost` value cannot deliver server-to-server callbacks to a developer's computer. Configure that endpoint only after the callback format and authentication are implemented; exposing the entire development app is not required.
+
+The service has a tested confirmation hook for a future status adapter. When that adapter is implemented from the provider's contract, it must independently verify the reference, ZMW currency and full amount before confirming the order or emailing a receipt. Concurrent confirmations must reuse the same result and send only one receipt. Receipt email failure must not undo a verified payment.
+
+This remains a sandbox demonstration: accounts and seller prices originate in browser storage, and checkout snapshots are kept in server memory for up to 24 hours. Server restarts clear them; check the sandbox dashboard before repeating an interrupted payment. Live payments require server-owned accounts, catalogue pricing and durable order storage. The integration cannot process live payments.
 
 The category endpoint should return five categories. The products endpoint should return 72 products when no filter is supplied.
 

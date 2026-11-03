@@ -670,7 +670,7 @@
       <section class="checkout-panel" aria-label="Checkout">
         <div class="panel-heading">
           <div>
-            <span class="eyebrow">Secure test checkout</span>
+            <span class="eyebrow">ZynlePay sandbox checkout</span>
             <h2>Complete your order</h2>
           </div>
           <button
@@ -704,7 +704,7 @@
               maxlength="80"
               placeholder="Your full name" /></label
           ><label
-            >Phone number<input
+            >Mobile money number<input
               id="checkoutPhone"
               type="tel"
               autocomplete="tel"
@@ -727,42 +727,24 @@
           /></label>
           <label
             >Payment method<select id="paymentMethod">
-              <option value="mtn_momo">MTN MoMo</option>
-              <option value="airtel_money">Airtel Money</option>
-              <option value="zamtel_kwacha">Zamtel Kwacha</option>
-              <option value="card">Visa / Mastercard (test)</option>
+              <option value="mobile_money">Mobile money</option>
+              <option value="card" disabled>Card testing unavailable</option>
             </select></label
           >
-          <fieldset>
-            <legend>Payment test outcome</legend>
-            <label class="radio-row"
-              ><input
-                type="radio"
-                name="paymentOutcome"
-                value="SUCCESS"
-                checked
-              />Approve payment</label
-            ><label class="radio-row"
-              ><input
-                type="radio"
-                name="paymentOutcome"
-                value="DECLINED"
-              />Decline payment</label
-            ><label class="radio-row"
-              ><input
-                type="radio"
-                name="paymentOutcome"
-                value="CANCELLED"
-              />Cancel payment</label
-            >
-          </fieldset>
+          <p class="fine-print">Submit a mobile-money test payment through ZynlePay.</p>
+          <details class="fine-print">
+            <summary>Using the sandbox</summary>
+            <p>Use a test number with an active simulator in your ZynlePay sandbox account.
+              Open the simulator in your ZynlePay dashboard to enter its test PIN when the payment prompt appears.
+              Local numbers such as 097 000 0000 are converted to the 260 format automatically.</p>
+          </details>
           <p id="checkoutError" class="form-error" hidden></p>
+          <p id="paymentStatus" class="fine-print" role="status" aria-live="polite" hidden></p>
           <p class="fine-print">
-            Demonstration only. Never enter real card, mobile money or banking
-            credentials.
+            Sandbox only. No real money is charged. Use test payment details.
           </p>
           <button id="checkoutSubmit" class="primary-button full-button" type="submit">
-            Submit test payment
+            Pay with ZynlePay
           </button>
         </form>
         <div id="checkoutSuccess" class="success-state" hidden>
@@ -770,7 +752,7 @@
           ><span class="eyebrow">Order confirmed</span>
           <h2 id="confirmationName">Thank you.</h2>
           <p>
-            Your demonstration payment was successful. Keep the reference below
+            Your ZynlePay test payment was verified. Keep the reference below
             for your order record.
           </p>
           <div class="confirmation">
@@ -794,6 +776,6 @@
       </section>
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    <script src="script.js?v=13"></script>
+    <script src="script.js?v=16"></script>
   </body>
 </html>
