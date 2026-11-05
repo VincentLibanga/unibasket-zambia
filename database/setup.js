@@ -8,10 +8,12 @@ import { databaseConfig } from './config.js';
 export async function setupDatabase(client) {
   const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
   const seed = await readFile(new URL('./seed.sql', import.meta.url), 'utf8');
+  const payments = await readFile(new URL('./payments.sql', import.meta.url), 'utf8');
 
   await client.query('BEGIN');
   try {
     await client.query(schema);
+    await client.query(payments);
     await client.query(seed);
     await client.query('COMMIT');
   } catch (error) {

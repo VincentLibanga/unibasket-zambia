@@ -5,6 +5,7 @@ import { verifyDatabase } from './db.js';
 import categoriesRouter from './routes/categories.js';
 import productsRouter from './routes/products.js';
 import ordersRouter from './routes/orders.js';
+import paymentsRouter from './routes/payments.js';
 import passwordResetsRouter from './routes/password-resets.js';
 import { isMailConfigured, MailError, sendAccountConfirmation, verifyMail } from './mail.js';
 
@@ -28,6 +29,7 @@ app.get('/api/health', async (_request, response, next) => {
 app.use('/api/categories', categoriesRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/orders', ordersRouter);
+app.use('/api/payments', paymentsRouter);
 app.use('/api/password-resets', passwordResetsRouter);
 
 app.post('/api/account-confirmations', async (request, response, next) => {

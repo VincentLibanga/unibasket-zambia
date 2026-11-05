@@ -1,6 +1,6 @@
-# UniBasket Task 3 Submission
+# UniBasket Zambia
 
-This submission implements Task 3: insert and display products and categories. It keeps the existing HTML, CSS and JavaScript interface and adds a Node.js 24 LTS and Express 5 backend connected to Supabase Postgres through `pg` (node-postgres).
+This project includes a product catalogue, shopping basket, browser-saved demonstration accounts, unpaid email orders and Flutterwave hosted payment integration. It uses HTML, CSS and JavaScript with a Node.js 24 LTS and Express 5 backend connected to Supabase Postgres through `pg` (node-postgres).
 
 ## Included work
 
@@ -17,13 +17,13 @@ This submission implements Task 3: insert and display products and categories. I
 - Route-based marketplace views for Home, Products, Categories, Account, Seller and Basket
 - Supabase Postgres schema, repeatable seed data and setup command
 
-Buyer and seller accounts and listings remain browser-only demonstrations. Checkout sends an itemized order confirmation by email through the Node.js server. Orders are marked unpaid; checkout does not collect money. During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Checkout requires sign-in and uses that profile name on the order confirmation. Seller listings are saved in the current browser and appear in the catalogue for that browser; a shared database seller catalogue can be added in a later backend milestone.
+Buyer and seller accounts and listings remain browser-only demonstrations. Checkout offers Flutterwave hosted payment for shared catalogue items and a separate unpaid email-order option. Online payment amounts come from the database, payment records are durable, and only server verification can mark an order paid. Payment integration defaults to test mode and requires provider credentials and database setup; see [PAYMENT_SETUP.md](PAYMENT_SETUP.md). During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Seller listings are saved in the current browser and appear in the catalogue for that browser; they can use the unpaid email-order option.
 
 The catalogue images are stored in `public/images/products`, so they display without a live image service. Fifty-two user-supplied AI-generated images have been matched to catalogue items and resized for web display. The remaining items retain representative licensed photos. The UniBasket product brand names are fictional; images illustrate the product type and do not claim to show that exact brand or package. Image provenance and available license details are listed in `PHOTO_CREDITS.md` and linked from the website footer. Sellers can upload a photo when publishing a listing; their listing and its photo are stored only in the current browser.
 
 The navigation uses page routes such as `?page=products`, `?page=categories`, `?page=account` and `?page=basket`, so the site behaves as one connected marketplace while each public area has its own URL state. Seller tools are shown only to accounts registered as sellers.
 
-Browser-saved accounts are tied to the exact site origin, including its port. An account created at `127.0.0.1:4176` is not available at `127.0.0.1:4178`; use the same address and port when returning to an account. Checkout confirms an unpaid order by email and does not process a payment.
+Browser-saved accounts are tied to the exact site origin, including its port. An account created at `127.0.0.1:4176` is not available at `127.0.0.1:4178`; use the same address and port when returning to an account. Online payments resume in the same browser tab using a private request key in session storage. Gateway credentials stay on the server.
 
 Successful sign-in and registration return to the home page and close the account panel. The basket stays available on small screens, with quantity controls, item removal and a checkout summary that remains visible while items scroll. A saved unfinished email confirmation can also be resumed from an empty basket.
 
@@ -49,9 +49,9 @@ When the API is available, public/script.js loads categories from `/api/categori
 
 For an existing Express server, Supabase's session pooler also works on IPv4-only networks. See the [Supabase connection guide](https://supabase.com/docs/guides/database/connecting-to-postgres) for direct and pooled connection options. A project URL or publishable API key is not a Postgres connection string.
 
-Alternatively, run `database/schema.sql` followed by `database/seed.sql` in the project's Supabase SQL Editor, then configure `DATABASE_URL` for the server. The SQL uses the project's existing database; it does not create a separate `unibasket` database. The seed restores the bundled catalogue; any additional rows in an old MySQL database need a separate data export and import.
+Alternatively, run `database/schema.sql`, `database/payments.sql` and `database/seed.sql` in the project's Supabase SQL Editor, then configure `DATABASE_URL` for the server. The SQL uses the project's existing database; it does not create a separate `unibasket` database. The seed restores the bundled catalogue; any additional rows in an old MySQL database need a separate data export and import.
 
-Row level security is enabled on both tables with no browser-facing policies. The Express backend uses its private database connection; Supabase API keys and the database password are never sent to the browser. This database migration covers categories and products. Accounts, seller listings and order confirmation snapshots keep the storage behavior described below.
+Row level security is enabled on catalogue and payment tables with no browser-facing policies. The Express backend uses its private database connection; Supabase API keys and the database password are never sent to the browser. Accounts, seller listings and unpaid email-order snapshots keep the storage behavior described below. Online payment records use the durable `payment_orders` table.
 
 ## API checks
 
@@ -90,7 +90,7 @@ Accounts still live in browser storage: use the same browser and site address wh
 
 If you originally registered by opening `public/index.html` as a `file:///` URL, reopen that exact file in the same browser and refresh it. Click **Move saved accounts** in the account panel. This opens the running app at `http://127.0.0.1:4176/` and copies your accounts and seller listings into its browser storage. Existing destination accounts are preserved, and the original file-preview data is retained. The new tab opens the password reset form with the transferred email filled in. The transfer stays between the two browser tabs; it does not upload account records to the server.
 
-## Email order confirmation
+## Unpaid email order confirmation
 
 Add products, sign in, open checkout, and choose a delivery method. The receipt destination is the signed-in account's email. Choose **Place order & email receipt** to submit `POST /api/orders`. No phone PIN, payment method, gateway account or API key is needed.
 

@@ -21,7 +21,7 @@ function invalid(message) {
   throw new OrderError('INVALID_ORDER_DETAILS', message);
 }
 
-function orderDetails(input) {
+export function orderDetails(input) {
   const { email, name, deliveryMethod, deliveryNote, items } = input || {};
   if (typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     invalid('Sign in with a valid email address before placing an order.');

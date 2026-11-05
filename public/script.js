@@ -894,6 +894,10 @@ function deliveryCharge() {
 }
 
 function openCheckout() {
+  if (typeof hasPendingOnlinePayment === "function" && hasPendingOnlinePayment()) {
+    resumeOnlinePayment();
+    return;
+  }
   if (!cart.length && !pendingOrder) {
     closeBasket();
     showToast("Add at least one product before checkout.");
@@ -925,10 +929,11 @@ function openCheckout() {
   updateCheckoutTotal();
   setCheckoutBusy(false);
   if (pendingOrder) showOrderStatus("An order confirmation is unfinished. Retry to use the same order reference.");
+  if (typeof updateOnlinePaymentButton === "function") updateOnlinePaymentButton();
 }
 
 function closeCheckout() {
-  if (checkoutBusy) return;
+  if (checkoutBusy || (typeof onlinePaymentIsBusy === "function" && onlinePaymentIsBusy())) return;
   document.getElementById("checkoutModal").hidden = true;
   document.body.classList.remove("shopping-open");
 }
@@ -1032,6 +1037,7 @@ function setCheckoutBusy(busy) {
   document.querySelectorAll("#checkoutForm input, #checkoutForm select").forEach(input => {
     input.disabled = busy || Boolean(pendingOrder);
   });
+  if (typeof updateOnlinePaymentButton === "function") updateOnlinePaymentButton();
 }
 
 async function orderApi(body) {
@@ -1057,6 +1063,7 @@ async function orderApi(body) {
 }
 
 function showCheckoutConfirmation(order) {
+  if (typeof resetPaymentConfirmation === "function") resetPaymentConfirmation();
   const orderedItems = pendingOrder?.items || [];
   document.getElementById("confirmationName").textContent = "Thank you, " + order.name + ".";
   document.getElementById("orderId").textContent = order.orderId;
@@ -1115,6 +1122,7 @@ function renderBasket() {
       (pendingOrder
         ? '<h3>Your order is saved.</h3><p>Resume your order below to finish sending the email confirmation.</p>'
         : '<h3>Your basket is empty.</h3><p>Find the study tools and everyday essentials you need.</p><button class="primary-button" type="button" onclick="navigateTo(\'products\')">Browse products <span aria-hidden="true">→</span></button>') + '</div>';
+  if (typeof syncPaymentBasket === "function") syncPaymentBasket();
 }
 
 function changeQty(i, d) {

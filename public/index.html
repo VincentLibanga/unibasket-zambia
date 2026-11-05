@@ -672,18 +672,19 @@
           /></label>
           <p id="checkoutError" class="form-error" hidden></p>
           <p id="orderStatus" class="fine-print" role="status" aria-live="polite" hidden></p>
-          <p class="fine-print">
-            No online payment is collected. Your emailed receipt confirms an unpaid order.
-          </p>
-          <button id="checkoutSubmit" class="primary-button full-button" type="submit">
+          <p id="onlinePaymentNote" class="fine-print" role="status">Pay securely through Flutterwave, or place an unpaid order below.</p>
+          <button id="onlinePaymentSubmit" class="primary-button full-button" type="button" onclick="submitOnlinePayment()">
+            Pay online
+          </button>
+          <button id="checkoutSubmit" class="ghost-button full-button" type="submit">
             Place order &amp; email receipt
           </button>
         </form>
         <div id="checkoutSuccess" class="success-state" hidden>
-          <span class="success-check">✓</span
-          ><span class="eyebrow">Order confirmed</span>
+          <span id="confirmationIcon" class="success-check">✓</span
+          ><span id="confirmationHeading" class="eyebrow">Order confirmed</span>
           <h2 id="confirmationName">Thank you.</h2>
-          <p>
+          <p id="confirmationDescription">
             Your order receipt has been sent by email. Keep the reference below
             for your records.
           </p>
@@ -693,9 +694,14 @@
             ><span>Order total</span><strong id="orderTotal"></strong>
           </div>
           <p id="receiptStatus" class="fine-print" role="status"></p>
-          <p class="fine-print">
+          <p id="confirmationPaymentNote" class="fine-print">
             No payment was collected. This receipt is an order confirmation.
           </p>
+          <div id="paymentActions" class="payment-actions" hidden>
+            <button id="checkPaymentButton" class="primary-button full-button" type="button" onclick="checkOnlinePayment()">Check payment status</button>
+            <button id="resumePaymentButton" class="ghost-button full-button" type="button" onclick="continueOnlinePayment()" hidden>Continue payment</button>
+            <button id="newPaymentButton" class="ghost-button full-button" type="button" onclick="finishFailedPayment()" hidden>Return to basket</button>
+          </div>
           <button
             class="primary-button full-button"
             type="button"
@@ -707,6 +713,7 @@
       </section>
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    <script src="script.js?v=20"></script>
+    <script src="script.js?v=21"></script>
+    <script src="payments.js?v=1"></script>
   </body>
 </html>

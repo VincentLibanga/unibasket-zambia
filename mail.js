@@ -135,27 +135,37 @@ export function buildOrderReceipt(receipt) {
     .map(line => `<tr><td>${line.quantity} × ${escapeHtml(line.name)}</td><td align="right">${money(line.lineTotal)}</td></tr>`)
     .join('');
   const deliveryNote = receipt.deliveryNote ? ` (${receipt.deliveryNote})` : '';
+  const paid = receipt.paymentStatus === 'paid';
+  const test = paid && receipt.paymentMode === 'test';
+  const paymentStatus = paid
+    ? test ? 'Paid (test). No real money was collected.' : 'Paid. Payment verified through Flutterwave.'
+    : 'Unpaid. No payment was collected.';
+  const paymentReference = paid ? `Payment reference: ${receipt.paymentRef}\n` : '';
+  const receiptNote = paid
+    ? test ? 'This receipt records a test payment and is not proof of a real payment.' : 'Keep this paid order receipt for your records.'
+    : 'Keep this order receipt for your records. It confirms your order and is not proof of payment.';
 
   return {
     to: receipt.email,
     subject: `UniBasket Zambia order confirmation ${receipt.orderId}`,
     text: `Hi ${receipt.name},\n\nThank you for your order. Your order has been received.\n\n` +
       `Order reference: ${receipt.orderId}\nDate: ${createdAt}\n` +
-      `Payment status: Unpaid. No payment was collected.\n\n` +
+      `Payment status: ${paymentStatus}\n${paymentReference}\n` +
       `Items:\n${textLines}\n\nSubtotal: ${money(receipt.subtotal)}\n` +
       `Delivery: ${receipt.deliveryMethod}${deliveryNote} — ${money(receipt.deliveryCharge)}\n` +
       `Order total: ${money(receipt.total)}\n\n` +
-      `Keep this order receipt for your records. It confirms your order and is not proof of payment.\n\nUniBasket Zambia\n${appUrl}`,
+      `${receiptNote}\n\nUniBasket Zambia\n${appUrl}`,
     html: `<p>Hi ${escapeHtml(receipt.name)},</p>` +
       `<p>Thank you for your order. Your order has been received.</p>` +
       `<p><strong>Order reference:</strong> ${escapeHtml(receipt.orderId)}<br>` +
       `<strong>Date:</strong> ${escapeHtml(createdAt)}</p>` +
-      `<p><strong>Payment status:</strong> Unpaid. No payment was collected.</p>` +
+      `<p><strong>Payment status:</strong> ${escapeHtml(paymentStatus)}</p>` +
+      (paid ? `<p><strong>Payment reference:</strong> ${escapeHtml(receipt.paymentRef)}</p>` : '') +
       `<table cellpadding="6" style="border-collapse:collapse;min-width:320px">${htmlRows}` +
       `<tr><td>Subtotal</td><td align="right">${money(receipt.subtotal)}</td></tr>` +
       `<tr><td>Delivery: ${escapeHtml(receipt.deliveryMethod + deliveryNote)}</td><td align="right">${money(receipt.deliveryCharge)}</td></tr>` +
       `<tr><td><strong>Order total</strong></td><td align="right"><strong>${money(receipt.total)}</strong></td></tr></table>` +
-      `<p style="color:#666">Keep this order receipt for your records. It confirms your order and is not proof of payment.</p>` +
+      `<p style="color:#666">${escapeHtml(receiptNote)}</p>` +
       `<p>UniBasket Zambia<br><a href="${escapeHtml(appUrl)}">${escapeHtml(appUrl)}</a></p>`,
   };
 }

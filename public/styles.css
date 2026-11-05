@@ -1059,6 +1059,14 @@ body.shopping-open {
   border-bottom: 1px solid var(--ink);
   padding-bottom: 1rem;
 }
+.payment-actions {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+.payment-actions[hidden] {
+  display: none;
+}
 .checkout-summary span {
   font-size: 0.875rem;
 }

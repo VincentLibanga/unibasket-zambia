@@ -123,7 +123,7 @@ test('an order receipt contains itemized amounts and explicitly identifies an un
   assert.doesNotMatch(message.text + message.html, /Total paid|payment was successful|Payment reference|Paid with/i);
 });
 
-test('the order API confirms delivery, returns mail failures, and has no payment endpoints', async t => {
+test('the unpaid order router confirms delivery, returns mail failures, and leaves payment routes to the payment router', async t => {
   let failMail = false;
   const { service, receipts } = fixture({ sendReceipt: async receipt => {
     if (failMail) throw new MailError('MAIL_UNREACHABLE', 'SMTP could not be reached.');
