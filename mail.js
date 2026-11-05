@@ -125,9 +125,9 @@ export async function sendPasswordResetCode({ email, code }) {
   });
 }
 
-export async function sendPaymentReceipt(receipt) {
-  const money = value => `ZMW ${Number(value).toLocaleString('en-ZM', { maximumFractionDigits: 2 })}`;
-  const paidAt = new Date(receipt.paidAt).toLocaleString('en-GB', { timeZone: 'Africa/Lusaka' });
+export function buildOrderReceipt(receipt) {
+  const money = value => `ZMW ${Number(value).toLocaleString('en-ZM', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const createdAt = new Date(receipt.createdAt).toLocaleString('en-GB', { timeZone: 'Africa/Lusaka' });
   const textLines = receipt.lines
     .map(line => `  ${line.quantity} x ${line.name} — ${money(line.lineTotal)}`)
     .join('\n');
@@ -136,29 +136,32 @@ export async function sendPaymentReceipt(receipt) {
     .join('');
   const deliveryNote = receipt.deliveryNote ? ` (${receipt.deliveryNote})` : '';
 
-  return sendMail({
+  return {
     to: receipt.email,
-    subject: `UniBasket Zambia payment receipt ${receipt.orderId}`,
-    text: `Hi ${receipt.name},\n\nThank you for your order. Your demonstration payment was successful.\n\n` +
-      `Order reference: ${receipt.orderId}\nPayment reference: ${receipt.paymentRef}\n` +
-      `Paid with: ${receipt.paymentMethod}\nDate: ${paidAt}\n\n` +
+    subject: `UniBasket Zambia order confirmation ${receipt.orderId}`,
+    text: `Hi ${receipt.name},\n\nThank you for your order. Your order has been received.\n\n` +
+      `Order reference: ${receipt.orderId}\nDate: ${createdAt}\n` +
+      `Payment status: Unpaid. No payment was collected.\n\n` +
       `Items:\n${textLines}\n\nSubtotal: ${money(receipt.subtotal)}\n` +
       `Delivery: ${receipt.deliveryMethod}${deliveryNote} — ${money(receipt.deliveryCharge)}\n` +
-      `Total paid: ${money(receipt.total)}\n\n` +
-      `This is a demonstration receipt. No real payment was processed.\n\nUniBasket Zambia\n${appUrl}`,
+      `Order total: ${money(receipt.total)}\n\n` +
+      `Keep this order receipt for your records. It confirms your order and is not proof of payment.\n\nUniBasket Zambia\n${appUrl}`,
     html: `<p>Hi ${escapeHtml(receipt.name)},</p>` +
-      `<p>Thank you for your order. Your demonstration payment was successful.</p>` +
+      `<p>Thank you for your order. Your order has been received.</p>` +
       `<p><strong>Order reference:</strong> ${escapeHtml(receipt.orderId)}<br>` +
-      `<strong>Payment reference:</strong> ${escapeHtml(receipt.paymentRef)}<br>` +
-      `<strong>Paid with:</strong> ${escapeHtml(receipt.paymentMethod)}<br>` +
-      `<strong>Date:</strong> ${escapeHtml(paidAt)}</p>` +
+      `<strong>Date:</strong> ${escapeHtml(createdAt)}</p>` +
+      `<p><strong>Payment status:</strong> Unpaid. No payment was collected.</p>` +
       `<table cellpadding="6" style="border-collapse:collapse;min-width:320px">${htmlRows}` +
       `<tr><td>Subtotal</td><td align="right">${money(receipt.subtotal)}</td></tr>` +
       `<tr><td>Delivery: ${escapeHtml(receipt.deliveryMethod + deliveryNote)}</td><td align="right">${money(receipt.deliveryCharge)}</td></tr>` +
-      `<tr><td><strong>Total paid</strong></td><td align="right"><strong>${money(receipt.total)}</strong></td></tr></table>` +
-      `<p style="color:#666">This is a demonstration receipt. No real payment was processed.</p>` +
+      `<tr><td><strong>Order total</strong></td><td align="right"><strong>${money(receipt.total)}</strong></td></tr></table>` +
+      `<p style="color:#666">Keep this order receipt for your records. It confirms your order and is not proof of payment.</p>` +
       `<p>UniBasket Zambia<br><a href="${escapeHtml(appUrl)}">${escapeHtml(appUrl)}</a></p>`,
-  });
+  };
+}
+
+export async function sendOrderReceipt(receipt) {
+  return sendMail(buildOrderReceipt(receipt));
 }
 
 function escapeHtml(value) {

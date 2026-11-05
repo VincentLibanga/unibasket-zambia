@@ -670,8 +670,9 @@ const SELLER_PRODUCT_STORE = "unibasket.sellerProducts.v1";
 let catalogueProducts = fallbackProducts;
 let products = fallbackProducts;
 let cart = [];
+let basketReturnFocus = null;
 let checkoutBusy = false;
-let pendingPayment = readPendingPayment();
+let pendingOrder = readPendingOrder();
 
 function readSellerProducts() {
   try {
@@ -721,7 +722,7 @@ function mergeSellerProducts() {
   const nextProducts = sellerRows(catalogueProducts);
   cart = remapCart(cart, products, nextProducts);
   products = nextProducts;
-  document.getElementById("count").textContent = cart.reduce((sum, item) => sum + item.q, 0);
+  updateCartBadge();
   document.getElementById("productCount").textContent = products.length;
   render();
 }
@@ -857,23 +858,26 @@ function add(i) {
   }
   if (line) line.q++;
   else cart.push({ i, q: 1 });
-  document.getElementById("count").textContent = cart.reduce(
-    (n, item) => n + item.q,
-    0,
-  );
+  updateCartBadge();
   showToast(p[0] + " added to your basket.");
 }
 
 function openBasket() {
+  const wasHidden = document.getElementById("basketModal").hidden;
+  if (wasHidden) basketReturnFocus = document.activeElement;
   document.getElementById("basketModal").hidden = false;
   document.body.classList.add("shopping-open");
+  document.querySelectorAll("body > header,body > main,body > footer").forEach(el => { el.inert = true; });
   renderBasket();
+  if (wasHidden) document.getElementById("basketClose").focus();
 }
 
 function closeBasket() {
   const routePage = new URLSearchParams(window.location.search).get("page");
   document.getElementById("basketModal").hidden = true;
   document.body.classList.remove("shopping-open");
+  document.querySelectorAll("body > header,body > main,body > footer").forEach(el => { el.inert = false; });
+  if (basketReturnFocus?.isConnected) basketReturnFocus.focus();
   if (routePage === "basket") {
     history.replaceState({}, "", "./");
     applyRoute();
@@ -890,7 +894,7 @@ function deliveryCharge() {
 }
 
 function openCheckout() {
-  if (!cart.length && !pendingPayment) {
+  if (!cart.length && !pendingOrder) {
     closeBasket();
     showToast("Add at least one product before checkout.");
     return;
@@ -898,7 +902,7 @@ function openCheckout() {
   if (!currentUser) {
     pendingCheckout = true;
     navigateTo("account");
-    accountError("Create an account or sign in before proceeding to payment.");
+    accountError("Create an account or sign in before placing an order.");
     return;
   }
   closeBasket();
@@ -907,13 +911,20 @@ function openCheckout() {
   document.getElementById("checkoutForm").hidden = false;
   document.getElementById("checkoutSuccess").hidden = true;
   document.getElementById("checkoutError").hidden = true;
-  document.getElementById("paymentStatus").hidden = true;
+  document.getElementById("orderStatus").hidden = true;
   const nameInput = document.getElementById("checkoutName");
-  nameInput.value = currentUser?.name || "";
-  nameInput.readOnly = Boolean(currentUser);
+  nameInput.value = pendingOrder?.details.name || currentUser.name;
+  nameInput.readOnly = true;
+  document.getElementById("checkoutReceiptEmail").textContent =
+    "Your order receipt will be emailed to " +
+    (pendingOrder?.details.email || currentUser.email) + ".";
+  if (pendingOrder) {
+    document.getElementById("deliveryMethod").value = pendingOrder.details.deliveryMethod;
+    document.getElementById("deliveryNote").value = pendingOrder.details.deliveryNote;
+  }
   updateCheckoutTotal();
   setCheckoutBusy(false);
-  if (pendingPayment) showPaymentStatus("A test payment is awaiting confirmation. Check its status before paying again.");
+  if (pendingOrder) showOrderStatus("An order confirmation is unfinished. Retry to use the same order reference.");
 }
 
 function closeCheckout() {
@@ -928,99 +939,87 @@ function returnToCatalogue() {
 }
 
 function updateCheckoutTotal() {
-  const itemCount = pendingPayment
-    ? pendingPayment.items.reduce((sum, item) => sum + item.quantity, 0)
+  const itemCount = pendingOrder
+    ? pendingOrder.items.reduce((sum, item) => sum + item.quantity, 0)
     : cart.reduce((sum, item) => sum + item.q, 0);
-  document.getElementById("checkoutItems").textContent =
-    itemCount + " items";
+  document.getElementById("checkoutItems").textContent = itemCount + " items";
   document.getElementById("checkoutTotal").textContent =
-    pendingPayment
-      ? Number.isFinite(pendingPayment.amount) ? "ZMW " + pendingPayment.amount.toLocaleString() : "Saved payment awaiting verification"
-      : "ZMW " + (basketSubtotal() + deliveryCharge()).toLocaleString();
+    "ZMW " + (pendingOrder ? pendingOrder.amount : basketSubtotal() + deliveryCharge()).toLocaleString();
 }
 
 async function submitCheckout() {
-  if (document.getElementById("checkoutSubmit")?.disabled) return;
+  if (checkoutBusy || document.getElementById("checkoutSubmit")?.disabled) return;
   const error = document.getElementById("checkoutError");
   if (!currentUser) {
     closeCheckout();
     pendingCheckout = true;
     navigateTo("account");
-    accountError("Create an account or sign in before proceeding to payment.");
-    return;
-  }
-  const buyerName = (
-    currentUser?.name || document.getElementById("checkoutName").value
-  ).trim();
-  if (buyerName.length < 2) {
-    error.textContent = "Enter your full name before placing the order.";
-    error.hidden = false;
-    document.getElementById("checkoutName").focus();
+    accountError("Create an account or sign in before placing an order.");
     return;
   }
   error.hidden = true;
   setCheckoutBusy(true);
   try {
-    if (pendingPayment && pendingPayment.email !== currentUser.email) {
-      throw new Error("Sign in with the account used for the pending test payment to check its status.");
+    if (pendingOrder && pendingOrder.details.email !== currentUser.email) {
+      throw new Error("Sign in with the account used for this order to retry its email confirmation.");
     }
-    if (pendingPayment) {
-      await confirmZynlePayment();
-      return;
+    if (!pendingOrder) {
+      pendingOrder = {
+        idempotencyKey: crypto.randomUUID(),
+        amount: basketSubtotal() + deliveryCharge(),
+        items: cart.map(item => ({ id: products[item.i][7], quantity: item.q })),
+        details: {
+          email: currentUser.email,
+          name: currentUser.name,
+          deliveryMethod: document.getElementById("deliveryMethod").value,
+          deliveryNote: document.getElementById("deliveryNote").value,
+          items: cart.map(item => ({ name: products[item.i][0], price: products[item.i][2], quantity: item.q })),
+        },
+      };
+      savePendingOrder();
     }
-    showPaymentStatus("Preparing your ZynlePay test payment…");
-    const basket = cart.map(item => ({ id: products[item.i][7], quantity: item.q }));
-    const checkout = await paymentApi("/checkout", {
-      email: currentUser.email,
-      name: buyerName,
-      phone: document.getElementById("checkoutPhone").value,
-      paymentMethod: document.getElementById("paymentMethod").value,
-      deliveryMethod: document.getElementById("deliveryMethod").value,
-      deliveryNote: document.getElementById("deliveryNote").value,
-      items: cart.map((item) => ({
-        name: products[item.i][0],
-        price: products[item.i][2],
-        quantity: item.q,
-      })),
-    });
-    pendingPayment = {
-      reference: checkout.reference, token: checkout.token,
-      name: checkout.name, email: checkout.email, amount: checkout.amount, items: basket,
-    };
-    savePendingPayment();
-    updateCheckoutTotal();
-    showPaymentStatus("Submitting your mobile-money test request to ZynlePay…");
-    const result = await paymentApi("/initiate", { reference: pendingPayment.reference, token: pendingPayment.token });
-    if (!applyPaymentResult(result)) await confirmZynlePayment();
+    showOrderStatus("Sending your order confirmation by email…");
+    const order = await orderApi({ ...pendingOrder.details, idempotencyKey: pendingOrder.idempotencyKey });
+    showCheckoutConfirmation(order);
   } catch (failure) {
-    error.textContent = failure.message || "The payment could not be completed. Check its status before trying again.";
+    // Correctable validation errors have not created an order or sent an email.
+    if (failure.code === "INVALID_ORDER_DETAILS") {
+      pendingOrder = null;
+      savePendingOrder();
+    }
+    error.textContent = failure.message || "Your order confirmation could not be sent. Your basket is unchanged. Please retry.";
     error.hidden = false;
+    document.getElementById("orderStatus").hidden = true;
   } finally {
+    updateCheckoutTotal();
     setCheckoutBusy(false);
   }
 }
 
-function readPendingPayment() {
+function readPendingOrder() {
   try {
-    const value = JSON.parse(sessionStorage.getItem("unibasket.zynlepay.pending.v1"));
-    return value && /^UBZ-[A-F0-9]{32}$/.test(value.reference) && /^[a-f0-9]{64}$/.test(value.token) &&
-      typeof value.email === "string" && Array.isArray(value.items) ? value : null;
+    const value = JSON.parse(sessionStorage.getItem("unibasket.order.pending.v1"));
+    return value && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value.idempotencyKey) &&
+      typeof value.details?.email === "string" && typeof value.details?.name === "string" &&
+      Array.isArray(value.details.items) && value.details.items.length > 0 &&
+      Array.isArray(value.items) && value.items.every(item => item && Number.isInteger(item.quantity) && item.quantity > 0) &&
+      Number.isFinite(value.amount) && value.amount > 0 ? value : null;
   } catch {
     return null;
   }
 }
 
-function savePendingPayment() {
+function savePendingOrder() {
   try {
-    if (pendingPayment) sessionStorage.setItem("unibasket.zynlepay.pending.v1", JSON.stringify(pendingPayment));
-    else sessionStorage.removeItem("unibasket.zynlepay.pending.v1");
+    if (pendingOrder) sessionStorage.setItem("unibasket.order.pending.v1", JSON.stringify(pendingOrder));
+    else sessionStorage.removeItem("unibasket.order.pending.v1");
   } catch {
-    // The in-memory reference still allows verification if browser storage is unavailable.
+    // The current tab can still retry using the in-memory order reference.
   }
 }
 
-function showPaymentStatus(message) {
-  const status = document.getElementById("paymentStatus");
+function showOrderStatus(message) {
+  const status = document.getElementById("orderStatus");
   status.textContent = message;
   status.hidden = false;
 }
@@ -1029,154 +1028,135 @@ function setCheckoutBusy(busy) {
   checkoutBusy = busy;
   const submit = document.getElementById("checkoutSubmit");
   submit.disabled = busy;
-  submit.textContent = busy ? "Checking payment…" : pendingPayment ? "Check payment status" : "Pay with ZynlePay";
+  submit.textContent = busy ? "Emailing your receipt…" : pendingOrder ? "Retry email confirmation" : "Place order & email receipt";
   document.querySelectorAll("#checkoutForm input, #checkoutForm select").forEach(input => {
-    input.disabled = busy || Boolean(pendingPayment);
+    input.disabled = busy || Boolean(pendingOrder);
   });
 }
 
-async function paymentApi(path, body) {
+async function orderApi(body) {
   let response;
   try {
-    response = await fetch("/api/payments" + path, {
+    response = await fetch("/api/orders", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       signal: AbortSignal.timeout(45000),
     });
   } catch {
-    throw new Error("The payment server could not be reached. Check payment status before starting another payment.");
+    throw new Error("The order server could not be reached. Your basket is unchanged. Retry to check the same order without sending a second receipt.");
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(payload.error?.message || "The payment server could not complete this request. Open the site through the UniBasket server.");
+    const error = new Error(payload.error?.message || "The order confirmation could not be sent. Open the site through the UniBasket server and retry.");
     error.code = payload.error?.code;
     throw error;
+  }
+  if (payload.data?.status !== "confirmed" || payload.data.emailSent !== true || payload.data.paymentStatus !== "unpaid") {
+    throw new Error("The order confirmation could not be verified. Retry using the same order reference.");
   }
   return payload.data;
 }
 
-function applyPaymentResult(order) {
-  if (pendingPayment && order.paymentRef) {
-    pendingPayment.paymentRef = order.paymentRef;
-    savePendingPayment();
-  }
-  if (order.status === "successful") {
-    showCheckoutConfirmation(order);
-    return true;
-  }
-  if (order.status === "failed") {
-    pendingPayment = null;
-    savePendingPayment();
-    updateCheckoutTotal();
-    document.getElementById("paymentStatus").hidden = true;
-    throw new Error(order.message || "The test payment was declined. Your basket is unchanged.");
-  }
-  return false;
-}
-
-async function confirmZynlePayment() {
-  showPaymentStatus("Checking your test payment…");
-  for (let attempt = 0; attempt < 8; attempt++) {
-    let order;
-    try {
-      order = await paymentApi("/verify", { reference: pendingPayment.reference, token: pendingPayment.token });
-    } catch (error) {
-      if (error.code === "PAYMENT_NOT_FOUND") {
-        pendingPayment = null;
-        savePendingPayment();
-      }
-      throw error;
-    }
-    if (order.status === "created") {
-      order = await paymentApi("/initiate", { reference: pendingPayment.reference, token: pendingPayment.token });
-    }
-    if (applyPaymentResult(order)) return;
-    if (order.confirmationAvailable === false) {
-      const transaction = order.paymentRef ? " Transaction: " + order.paymentRef + "." : "";
-      const progress = order.gatewayCode === "995"
-        ? "ZynlePay could not confirm completion of this test payment (code 995). Your order is awaiting confirmation."
-        : order.gatewayCode === "120"
-          ? "ZynlePay has initiated the test request. Confirmation is pending."
-          : "ZynlePay has not confirmed this test payment.";
-      showPaymentStatus(progress + transaction + " Check your ZynlePay sandbox dashboard before paying again. Reference: " + pendingPayment.reference);
-      return;
-    }
-    if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  showPaymentStatus("Your test payment is still pending. Use Check payment status before paying again. Reference: " + pendingPayment.reference);
-}
-
 function showCheckoutConfirmation(order) {
-  const paidItems = pendingPayment?.items || [];
-  document.getElementById("confirmationName").textContent =
-    "Thank you, " + order.name + ".";
+  const orderedItems = pendingOrder?.items || [];
+  document.getElementById("confirmationName").textContent = "Thank you, " + order.name + ".";
   document.getElementById("orderId").textContent = order.orderId;
-  document.getElementById("paymentRef").textContent = order.paymentRef;
-  document.getElementById("paymentMethodPaid").textContent =
-    order.paymentMethod;
-  document.getElementById("orderTotal").textContent =
-    "ZMW " + order.total.toLocaleString();
-  document.getElementById("receiptStatus").textContent = order.emailSent
-    ? "A receipt has been emailed to " + order.email + "."
-    : "Your order is confirmed, but the receipt email could not be sent.";
+  document.getElementById("orderPaymentStatus").textContent = "Unpaid";
+  document.getElementById("orderTotal").textContent = "ZMW " + order.total.toLocaleString();
+  document.getElementById("receiptStatus").textContent = "An order receipt has been emailed to " + order.email + ".";
   document.getElementById("checkoutForm").hidden = true;
   document.getElementById("checkoutSuccess").hidden = false;
   cart = cart.flatMap(item => {
-    const paid = paidItems.find(line => line.id === products[item.i][7]);
-    const quantity = Math.max(0, item.q - (paid?.quantity || 0));
+    const ordered = orderedItems.find(line => line.id === products[item.i][7]);
+    const quantity = Math.max(0, item.q - (ordered?.quantity || 0));
     return quantity ? [{ ...item, q: quantity }] : [];
   });
-  pendingPayment = null;
-  savePendingPayment();
-  document.getElementById("count").textContent = String(cart.reduce((sum, item) => sum + item.q, 0));
+  pendingOrder = null;
+  savePendingOrder();
+  updateCartBadge();
   renderBasket();
 }
 
+function updateCartBadge() {
+  const count = cart.reduce((sum, item) => sum + item.q, 0);
+  document.getElementById("count").textContent = count > 99 ? "99+" : String(count);
+  document.getElementById("cartButton")?.setAttribute("aria-label", "Open basket, " + count + (count === 1 ? " item" : " items"));
+}
+
 function renderBasket() {
-  const total = cart.reduce((n, item) => n + products[item.i][2] * item.q, 0);
-  document.getElementById("subtotal").textContent =
-    "ZMW " + total.toLocaleString();
+  const money = value => "ZMW " + value.toLocaleString("en-ZM", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const total = cart.reduce((sum, item) => sum + products[item.i][2] * item.q, 0);
+  const count = cart.reduce((sum, item) => sum + item.q, 0);
+  updateCartBadge();
+  document.getElementById("basketItemCount").textContent = count + (count === 1 ? " item" : " items");
+  document.getElementById("basketTotalLabel").textContent = pendingOrder ? "Saved order total" : "Subtotal";
+  document.getElementById("subtotal").textContent = money(pendingOrder ? pendingOrder.amount : total);
+  document.getElementById("basketFooter").hidden = !cart.length && !pendingOrder;
+  document.getElementById("basketCheckout").disabled = !cart.length && !pendingOrder;
+  document.getElementById("basketCheckout").innerHTML = (pendingOrder ? "Resume order confirmation" : "Continue to checkout") + ' <span aria-hidden="true">→</span>';
+  document.getElementById("basketDeliveryNote").textContent = pendingOrder
+    ? "Your saved order includes delivery. Resume to finish sending its receipt."
+    : "Delivery is calculated at checkout.";
   document.getElementById("basketLines").innerHTML = cart.length
-    ? '<div class="panel-lines">' +
-      cart
-        .map((item) => {
-          const p = products[item.i];
-          return (
-            '<div class="panel-line"><img class="basket-product-photo" src="' +
-            escapeHtml(p[9] || cataloguePhoto(p[7])) +
-            '" alt="" loading="lazy"><div><strong>' +
-            escapeHtml(p[0]) +
-            "</strong><small>ZMW " +
-            p[2] +
-            ' each</small><div class="quantity"><button type="button" onclick="changeQty(' +
-            item.i +
-            ',-1)">−</button><span>' +
-            item.q +
-            '</span><button type="button" onclick="changeQty(' +
-            item.i +
-            ',1)">+</button></div></div><b>ZMW ' +
-            (p[2] * item.q).toLocaleString() +
-            "</b></div>"
-          );
-        })
-        .join("") +
-      "</div>"
-    : '<div class="empty-panel"><span class="empty-icon">UB</span><h3>Your basket is ready for its first item.</h3><p>Add a product below to start your order.</p></div>';
+    ? '<div class="panel-lines">' + cart.map(item => {
+      const product = products[item.i];
+      const name = escapeHtml(product[0]);
+      return '<div class="panel-line">' +
+        '<img class="basket-product-photo" src="' + escapeHtml(product[9] || cataloguePhoto(product[7])) + '" alt="" loading="lazy">' +
+        '<div class="basket-item-copy"><strong>' + name + '</strong><small>' + money(product[2]) + ' each</small></div>' +
+        '<button class="basket-remove" type="button" aria-label="Remove ' + name + ' from basket" onclick="removeCartItem(' + item.i + ')">' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg></button>' +
+        '<div class="quantity">' +
+          '<button id="basketDecrease-' + item.i + '" type="button" aria-label="Decrease quantity of ' + name + '" onclick="changeQty(' + item.i + ',-1)"' + (item.q <= 1 ? ' disabled' : '') + '>−</button>' +
+          '<span aria-label="Quantity" aria-live="polite">' + item.q + '</span>' +
+          '<button id="basketIncrease-' + item.i + '" type="button" aria-label="Increase quantity of ' + name + '" onclick="changeQty(' + item.i + ',1)"' + (item.q >= Math.min(product[8], 99) ? ' disabled' : '') + '>+</button>' +
+        '</div><strong class="basket-line-total">' + money(product[2] * item.q) + '</strong></div>';
+    }).join("") + '</div>'
+    : '<div class="empty-panel"><span class="empty-icon" aria-hidden="true"><svg class="cart-icon" viewBox="0 0 24 24"><path d="M5 7h14l1 14H4L5 7Zm3 0V5a4 4 0 0 1 8 0v2" /></svg></span>' +
+      (pendingOrder
+        ? '<h3>Your order is saved.</h3><p>Resume your order below to finish sending the email confirmation.</p>'
+        : '<h3>Your basket is empty.</h3><p>Find the study tools and everyday essentials you need.</p><button class="primary-button" type="button" onclick="navigateTo(\'products\')">Browse products <span aria-hidden="true">→</span></button>') + '</div>';
 }
 
 function changeQty(i, d) {
-  const line = cart.find((item) => item.i === i);
+  const line = cart.find(item => item.i === i);
   if (!line) return;
   if (d > 0 && line.q >= Math.min(products[i][8], 99)) {
     showToast("The available quantity is already in your basket.");
     return;
   }
   line.q += d;
-  if (line.q < 1) cart = cart.filter((item) => item.i !== i);
-  document.getElementById("count").textContent = cart.reduce(
-    (n, item) => n + item.q,
-    0,
-  );
+  if (line.q < 1) cart = cart.filter(item => item.i !== i);
   renderBasket();
+  const target = document.getElementById((d > 0 ? "basketIncrease-" : "basketDecrease-") + i);
+  const fallback = document.getElementById((d > 0 ? "basketDecrease-" : "basketIncrease-") + i);
+  (target && !target.disabled ? target : fallback || document.getElementById("basketClose"))?.focus();
+}
+
+function removeCartItem(i) {
+  cart = cart.filter(item => item.i !== i);
+  renderBasket();
+  (document.querySelector(".basket-remove") || document.getElementById("basketClose")).focus();
+}
+
+function handleBasketKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeBasket();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const controls = [...document.querySelectorAll("#basketModal button:not(:disabled), #basketModal a[href]")]
+    .filter(element => element.getClientRects().length > 0);
+  if (!controls.length) return;
+  const first = controls[0], last = controls[controls.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !controls.includes(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !controls.includes(active))) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function filterCategory(c) {
@@ -1700,12 +1680,8 @@ function startAccountSession(user) {
   }
   document.getElementById("accountForm").reset();
   document.getElementById("registerForm").reset();
-  showAccountProfile();
-  if (pendingCheckout) {
-    pendingCheckout = false;
-    closeAccount();
-    openCheckout();
-  }
+  pendingCheckout = false;
+  updateAccountButton();
 }
 
 function setAccountMode(mode) {
@@ -1896,6 +1872,7 @@ async function submitRegistration() {
     return;
   }
   setAccountBusy(true, "Creating your account…");
+  let signedIn = false;
   try {
     if (readAccounts().some((user) => user.email === email)) {
       throw new Error(
@@ -1923,6 +1900,7 @@ async function submitRegistration() {
     }
     writeAccounts([...latestUsers, user]);
     startAccountSession(user);
+    signedIn = true;
   } catch (error) {
     accountError(
       error.message || "Your account could not be created. Please try again.",
@@ -1930,6 +1908,7 @@ async function submitRegistration() {
   } finally {
     setAccountBusy(false);
   }
+  if (signedIn) navigateTo("home", { replace: true });
 }
 
 async function submitLogin() {
@@ -1941,6 +1920,7 @@ async function submitLogin() {
   document.getElementById("accountEmail").value = email;
   if (!form.reportValidity()) return;
   setAccountBusy(true, "Checking your account…");
+  let signedIn = false;
   try {
     const user = readAccounts().find((account) => account.email === email);
     if (
@@ -1952,12 +1932,14 @@ async function submitLogin() {
       );
     }
     startAccountSession(user);
+    signedIn = true;
   } catch (error) {
     accountError(error.message || "Sign in failed. Please try again.");
   } finally {
     document.getElementById("accountPassword").value = "";
     setAccountBusy(false);
   }
+  if (signedIn) navigateTo("home", { replace: true });
 }
 
 function signOut() {
@@ -1995,6 +1977,8 @@ function restoreAccountSession() {
   }
   updateAccountButton();
 }
+
+document.getElementById("basketModal").addEventListener("keydown", handleBasketKeydown);
 
 document.getElementById("accountModal").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -2130,16 +2114,23 @@ document.addEventListener("click", (event) => {
     toggleMobileMenu(false);
 });
 
+document.addEventListener("focusin", (event) => {
+  const header = document.querySelector(".site-header");
+  if (header.classList.contains("menu-open") && !header.contains(event.target))
+    toggleMobileMenu(false);
+});
+
 window
   .matchMedia("(max-width: 48rem)")
   .addEventListener?.("change", (event) => {
     if (!event.matches) toggleMobileMenu(false);
   });
 
-function navigateTo(page) {
+function navigateTo(page, { replace = false } = {}) {
   toggleMobileMenu(false);
   const target = page === "home" ? "./" : `?page=${encodeURIComponent(page)}`;
-  history.pushState({ page }, "", target);
+  if (replace) history.replaceState({ page }, "", target);
+  else history.pushState({ page }, "", target);
   applyRoute();
 }
 

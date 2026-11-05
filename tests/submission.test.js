@@ -46,10 +46,11 @@ test('small-screen header uses an accessible collapsible menu', async () => {
     readFile(new URL('public/styles.css', root), 'utf8'),
     readFile(new URL('public/script.js', root), 'utf8')
   ]);
-  assert.match(html, /id="menuButton"[^>]*aria-expanded="false"[^>]*aria-controls="headerActions mainNavigation"/);
+  assert.match(html, /id="menuButton"[^>]*aria-expanded="false"[^>]*aria-controls="headerMenu"/);
+  assert.match(html, /id="headerMenu"/);
   assert.match(css, /@media \(max-width: 48rem\)[\s\S]*?\.site-header \.header-search\s*\{\s*display: grid;/);
-  assert.match(css, /\.site-header \.header-actions,\s*\.site-header nav\s*\{\s*display: none;\s*\}/);
-  assert.match(css, /\.site-header\.menu-open \.header-actions\s*\{\s*display: grid;/);
+  assert.match(css, /\.site-header \.header-menu\s*\{\s*display: none;/);
+  assert.match(css, /\.site-header\.menu-open \.header-menu\s*\{\s*display: flex;/);
   assert.match(script, /function toggleMobileMenu\(open\)/);
   assert.match(script, /button\.setAttribute\(["']aria-expanded["'],\s*String\(expanded\)\)/);
 });
