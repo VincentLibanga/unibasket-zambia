@@ -1,5 +1,5 @@
-// Hosted checkout keeps card details and mobile-money PINs on the provider's page.
-const PAYMENT_STORE = 'unibasket.payment.pending.v1';
+// Sandbox mobile-money authorization happens in the ZynlePay simulator; never collect a PIN.
+const PAYMENT_STORE = 'unibasket.zynlepay.pending.v1';
 let paymentConfigState = { available: false, mode: 'test' };
 let paymentBusy = false;
 let pendingPayment = readOnlinePayment();
@@ -21,13 +21,11 @@ function onlinePaymentIsBusy() { return paymentBusy; }
 
 function updateOnlinePaymentButton() {
   const button = document.getElementById('onlinePaymentSubmit');
-  button.disabled = !paymentConfigState.available || checkoutBusy || paymentBusy || Boolean(pendingOrder);
-  button.textContent = paymentBusy ? 'Preparing payment…' : paymentConfigState.mode === 'test' ? 'Pay online · Test mode' : 'Pay online';
+  button.disabled = !paymentConfigState.available || checkoutBusy || paymentBusy || Boolean(pendingOrder) || hasPendingOnlinePayment();
+  button.textContent = paymentBusy ? 'Submitting sandbox request…' : 'Pay with ZynlePay · Sandbox';
   document.getElementById('onlinePaymentNote').textContent = paymentConfigState.available
-    ? paymentConfigState.mode === 'test'
-      ? 'Test payment through Flutterwave. No real money is collected in test mode.'
-      : 'Pay securely through Flutterwave. Available methods are shown on its payment page.'
-    : 'Online payment is currently unavailable. You can place an unpaid order by email below.';
+    ? 'ZynlePay sandbox only. You can also place an unpaid order by email.'
+    : 'ZynlePay sandbox is currently unavailable. You can place an unpaid order by email below.';
 }
 
 function syncPaymentBasket() {
@@ -56,7 +54,7 @@ async function paymentApi(path, body) {
   const result = payload.data;
   if (!/^UBP-[A-F\d]{32}$/.test(result?.reference || '') ||
       (pendingPayment.reference && result.reference !== pendingPayment.reference) ||
-      !['pending', 'failed', 'paid'].includes(result.paymentStatus) || !['test', 'live'].includes(result.mode) ||
+      !['pending', 'failed', 'paid'].includes(result.paymentStatus) || result.mode !== 'test' || result.provider !== 'ZynlePay' || result.checkoutUrl ||
       !Number.isFinite(result.total) || result.total <= 0 || result.currency !== 'ZMW') {
     throw new Error('The payment result could not be verified. Please check again.');
   }
@@ -69,10 +67,17 @@ async function submitOnlinePayment() {
   if (!currentUser) { navigateTo('account'); accountError('Sign in before paying for an order.'); return; }
   if (!document.getElementById('checkoutForm').reportValidity()) return;
   if (!cart.length) return;
+  const phone = document.getElementById('paymentPhone').value.trim();
+  if (!phone) {
+    document.getElementById('checkoutError').hidden = false;
+    document.getElementById('checkoutError').textContent = 'Enter the mobile number configured in your ZynlePay sandbox simulator.';
+    document.getElementById('paymentPhone').focus();
+    return;
+  }
   pendingPayment = {
     idempotencyKey: crypto.randomUUID(),
     details: {
-      name: currentUser.name, email: currentUser.email,
+      name: currentUser.name, email: currentUser.email, phone,
       deliveryMethod: document.getElementById('deliveryMethod').value,
       deliveryNote: document.getElementById('deliveryNote').value,
       items: cart.map(item => ({ id: products[item.i][7], quantity: item.q })),
@@ -98,11 +103,10 @@ async function startSavedOnlinePayment() {
     pendingPayment.reference = result.reference;
     pendingPayment.result = result;
     saveOnlinePayment();
-    if (result.paymentStatus === 'pending' && result.checkoutUrl) continueOnlinePayment();
-    else showOnlinePayment(result);
+    showOnlinePayment(result);
   } catch (error) {
     // Validation failures have not created a charge and can be corrected safely.
-    if (['INVALID_ORDER_DETAILS', 'INVALID_PAYMENT_ITEMS', 'PRODUCT_UNAVAILABLE', 'PAYMENT_NOT_CONFIGURED'].includes(error.code)) {
+    if (['INVALID_ORDER_DETAILS', 'INVALID_PAYMENT_DETAILS', 'INVALID_PAYMENT_ITEMS', 'PRODUCT_UNAVAILABLE', 'PAYMENT_NOT_CONFIGURED', 'PAYMENT_ENVIRONMENT_INVALID'].includes(error.code)) {
       pendingPayment = null;
       sessionStorage.removeItem(PAYMENT_STORE);
       document.getElementById('checkoutError').hidden = false;
@@ -115,18 +119,6 @@ async function startSavedOnlinePayment() {
   }
 }
 
-function continueOnlinePayment() {
-  const value = pendingPayment?.result?.checkoutUrl;
-  let url;
-  try { url = new URL(value); } catch { return; }
-  if (url.protocol !== 'https:' || url.hostname !== 'checkout.flutterwave.com' || url.username || url.password || url.port) {
-    showPaymentUncertainty('The payment address could not be verified. Check payment status.');
-    return;
-  }
-  saveOnlinePayment();
-  window.location.assign(url.href);
-}
-
 function openPaymentResult() {
   closeBasket();
   document.getElementById('checkoutModal').hidden = false;
@@ -134,10 +126,10 @@ function openPaymentResult() {
   document.getElementById('checkoutForm').hidden = true;
   document.getElementById('checkoutSuccess').hidden = false;
   document.getElementById('confirmationHeading').textContent = 'Payment status';
-  document.getElementById('confirmationName').textContent = 'Your online payment';
+  document.getElementById('confirmationName').textContent = 'Your ZynlePay sandbox payment';
   document.getElementById('confirmationIcon').textContent = '…';
   document.getElementById('paymentActions').hidden = false;
-  document.getElementById('resumePaymentButton').hidden = true;
+  document.getElementById('emailInsteadButton').hidden = !pendingPayment;
   document.getElementById('newPaymentButton').hidden = true;
   document.getElementById('checkPaymentButton').disabled = paymentBusy;
 }
@@ -163,14 +155,15 @@ function showOnlinePayment(result) {
   document.getElementById('orderPaymentStatus').textContent = (paid ? 'Paid' : failed ? 'Failed' : 'Pending') + (result.mode === 'test' ? ' (test)' : '');
   document.getElementById('confirmationDescription').textContent = paid
     ? 'Your payment has been verified. Keep your order reference for your records.'
-    : failed ? 'This payment attempt did not complete. Your basket is kept.'
-      : 'Your payment is awaiting confirmation. Check its status before starting another payment.';
+    : failed ? result.failureMessage || 'This sandbox payment attempt did not complete. Your basket is kept.'
+      : result.confirmationAvailable === false
+        ? 'Sandbox payment completion is unconfirmed. Check your ZynlePay simulator and dashboard before trying another payment.'
+        : 'Your payment is awaiting confirmation. Check its status before starting another payment.';
   document.getElementById('receiptStatus').textContent = paid
     ? result.emailSent ? 'A paid order receipt has been emailed to ' + result.email + '.' : 'Payment is confirmed. The receipt email is pending; check again to retry delivery.'
     : '';
-  document.getElementById('confirmationPaymentNote').textContent = result.mode === 'test'
-    ? 'Test transaction. No real money was collected.' : paid ? 'Payment confirmed through Flutterwave.' : 'You can return here to check payment status.';
-  document.getElementById('resumePaymentButton').hidden = paid || failed || !result.checkoutUrl;
+  document.getElementById('confirmationPaymentNote').textContent = 'ZynlePay sandbox. No real money is collected.' + (result.gatewayCode ? ' Sandbox response: ' + result.gatewayCode + '.' : '');
+  document.getElementById('emailInsteadButton').hidden = paid;
   document.getElementById('newPaymentButton').hidden = !failed;
   if (paid && !pendingPayment.settled) {
     cart = cart.flatMap(item => {
@@ -219,6 +212,18 @@ function finishFailedPayment() {
   navigateTo('basket');
 }
 
+function openEmailCheckout() {
+  if (paymentBusy || !pendingPayment) return;
+  if (!cart.length) {
+    cart = pendingPayment.details.items.flatMap(item => {
+      const index = products.findIndex(product => product[7] === item.id);
+      return index < 0 ? [] : [{ i: index, q: item.quantity }];
+    });
+  }
+  closeCheckout();
+  openCheckout({ emailOnly: true });
+}
+
 function resetPaymentConfirmation() {
   document.getElementById('confirmationIcon').textContent = '✓';
   document.getElementById('confirmationHeading').textContent = 'Order confirmed';
@@ -241,5 +246,5 @@ if (new URLSearchParams(window.location.search).get('payment_return') === '1') {
   // Query-string status and transaction IDs are never treated as proof of payment.
   history.replaceState({}, '', './');
   if (pendingPayment) resumeOnlinePayment();
-  else showPaymentUncertainty('Open this payment in the browser tab where you started checkout. Your order reference is available from Flutterwave.');
+  else showPaymentUncertainty('Open this sandbox payment in the browser tab where you started checkout. Check the ZynlePay dashboard for earlier payment references.');
 }

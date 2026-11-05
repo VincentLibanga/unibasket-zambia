@@ -6,64 +6,58 @@ import { PGlite } from '@electric-sql/pglite';
 import express from 'express';
 import { setupDatabase } from '../database/setup.js';
 import { buildOrderReceipt } from '../mail.js';
-import { createFlutterwaveGateway, paymentConfig, PaymentError, validCheckoutUrl } from '../payment-gateway.js';
+import { createZynlepayGateway, paymentConfig, PaymentError } from '../payment-gateway.js';
 import { createPaymentStore } from '../payment-store.js';
 import { createPaymentService } from '../payments.js';
 import { createPaymentsRouter } from '../routes/payments.js';
 
-const env = { PAYMENT_MODE: 'test', FLW_SECRET_KEY: 'FLWSECK_TEST-example-X',
-  FLW_WEBHOOK_SECRET: 'a-long-test-webhook-secret-for-tests', APP_URL: 'http://127.0.0.1:4176' };
-const checkoutUrl = 'https://checkout.flutterwave.com/v3/hosted/pay/example';
-const input = () => ({ idempotencyKey: randomUUID(), name: 'Vince Buyer', email: 'buyer@example.test',
+const env = { PAYMENT_MODE: 'test', ZYNLEPAY_SANDBOX_MERCHANT_CODE: 'MEC-TEST',
+  ZYNLEPAY_SANDBOX_API_ID: 'test-api-id', ZYNLEPAY_SANDBOX_API_KEY: 'test-secret' };
+const input = () => ({ idempotencyKey: randomUUID(), name: 'Vince Buyer', email: 'buyer@example.test', phone: '097 000 0000',
   deliveryMethod: 'campus', deliveryNote: 'Main campus', items: [{ id: 1, quantity: 1 }] });
 
-test('payment configuration defaults to test mode and keeps live credentials out of test mode', () => {
+test('payment configuration is sandbox-only and requires ZynlePay credentials', () => {
   assert.equal(paymentConfig({ ...env, PAYMENT_MODE: undefined }).mode, 'test');
-  assert.equal(paymentConfig(env).redirectUrl, 'http://127.0.0.1:4176/?payment_return=1');
-  for (const change of [{ FLW_SECRET_KEY: '' }, { FLW_SECRET_KEY: 'FLWSECK-live-X' },
-    { PAYMENT_MODE: 'live' }, { PAYMENT_MODE: 'other' }, { FLW_WEBHOOK_SECRET: 'short' },
-    { APP_URL: 'http://shop.example' }, { APP_URL: 'https://user:secret@example.test' }]) {
-    assert.throws(() => paymentConfig({ ...env, ...change }), { code: 'PAYMENT_NOT_CONFIGURED' });
+  for (const key of ['ZYNLEPAY_SANDBOX_MERCHANT_CODE', 'ZYNLEPAY_SANDBOX_API_ID', 'ZYNLEPAY_SANDBOX_API_KEY']) {
+    assert.throws(() => paymentConfig({ ...env, [key]: '' }), { code: 'PAYMENT_NOT_CONFIGURED' });
   }
-  assert.equal(paymentConfig({ ...env, PAYMENT_MODE: 'live', FLW_SECRET_KEY: 'FLWSECK-example-X', APP_URL: 'https://shop.example' }).mode, 'live');
-  for (const url of ['https://evil.example', 'https://checkout.flutterwave.com.evil.example',
-    'http://checkout.flutterwave.com', 'https://user@checkout.flutterwave.com', 'https://checkout.flutterwave.com:8443']) {
-    assert.equal(validCheckoutUrl(url), false);
+  for (const change of [{ PAYMENT_MODE: 'live' }, { ZYNLEPAY_SANDBOX_API_URL: 'https://evil.example' }]) {
+    assert.throws(() => paymentConfig({ ...env, ...change }), { code: 'PAYMENT_ENVIRONMENT_INVALID' });
   }
-  assert.equal(validCheckoutUrl(checkoutUrl), true);
 });
 
-test('gateway creates ZMW hosted checkout and verifies through the official API without exposing secrets', async () => {
+test('ZynlePay gateway uses the restored initiation and status contracts without assuming paid', async () => {
   const calls = [];
-  const gateway = createFlutterwaveGateway({ env: () => env, fetcher: async (url, options) => {
+  const gateway = createZynlepayGateway({ env: () => env, fetcher: async (url, options) => {
     calls.push({ url, options });
-    return { ok: true, json: async () => ({ status: 'success', data: options.method === 'POST' ? { link: checkoutUrl } : { status: 'successful' } }) };
+    return { ok: true, json: async () => ({ response_code: calls.length === 1 ? '120' : '995',
+      reference_no: 'UBP-EXAMPLE', transaction_id: 123456 }) };
   } });
-  assert.equal(await gateway.initiate({ reference: 'UBP-EXAMPLE', amount_cents: '9000', details: input() }), checkoutUrl);
+  const order = { reference: 'UBP-EXAMPLE', amount_cents: '9000', details: input() };
+  const initiated = await gateway.initiate(order);
+  assert.equal(initiated.status, 'pending');
+  assert.equal(initiated.transactionId, '123456');
   const body = JSON.parse(calls[0].options.body);
-  assert.equal(calls[0].url, 'https://api.flutterwave.com/v3/payments');
-  assert.equal(body.currency, 'ZMW');
-  assert.equal(body.amount, '90.00');
-  assert.equal(body.payment_options, 'card,mobilemoneyzambia');
-  assert.equal('secretKey' in body, false);
-  await gateway.verify('UBP-EXAMPLE');
-  assert.match(calls[1].url, /verify_by_reference\?tx_ref=UBP-EXAMPLE$/);
-  assert.equal(gateway.verifyWebhook(env.FLW_WEBHOOK_SECRET), true);
-  assert.equal(gateway.verifyWebhook('forged'), false);
-  assert.equal(gateway.verifyWebhook(undefined), false);
+  assert.equal(calls[0].url, 'https://sandbox.zynlepay.com/zynlepay/jsonapi');
+  assert.equal(body.data.sender_id, '260970000000');
+  assert.equal(body.data.amount, '90.00');
+  const checked = await gateway.verify(order);
+  assert.equal(calls[1].url, 'https://sandbox.zynlepay.com/zynlepay/jsonapi/paymentstatus');
+  assert.equal(checked.status, 'pending');
+  assert.equal(checked.confirmationAvailable, false);
+  assert.equal(checked.gatewayCode, '995');
 });
 
-test('invalid provider links, malformed responses and network errors fail without leaking provider output', async () => {
+test('arbitrary status messages never establish successful payment and provider errors do not leak', async () => {
   const order = { reference: 'UBP-EXAMPLE', amount_cents: 9000, details: input() };
-  const invalid = createFlutterwaveGateway({ env: () => env, fetcher: async () => ({ ok: true, json: async () => ({ status: 'success', data: { link: 'https://evil.example' } }) }) });
-  await assert.rejects(invalid.initiate(order), { code: 'INVALID_PAYMENT_LINK' });
-  const offline = createFlutterwaveGateway({ env: () => env, fetcher: async () => { throw new Error('secret provider output'); } });
-  await assert.rejects(offline.verify(order.reference), error => error.code === 'PAYMENT_PROVIDER_UNAVAILABLE' && !error.message.includes('secret provider output'));
-  const rejected = createFlutterwaveGateway({ env: () => env, fetcher: async () => ({ ok: false, status: 401, json: async () => ({ message: 'private provider output' }) }) });
-  await assert.rejects(rejected.initiate(order), { code: 'PAYMENT_REJECTED' });
+  const gateway = createZynlepayGateway({ env: () => env, fetcher: async () => ({ ok: true,
+    json: async () => ({ response_code: '100', reference_no: order.reference, status: 'successful', message: 'Paid' }) }) });
+  assert.equal((await gateway.verify(order)).status, 'pending');
+  const offline = createZynlepayGateway({ env: () => env, fetcher: async () => { throw new Error('secret provider output'); } });
+  await assert.rejects(offline.verify(order), error => error.code === 'PAYMENT_UNREACHABLE' && !error.message.includes('secret provider output'));
 });
 
-test('durable payment checkout, verification and webhook handling', async t => {
+test('durable ZynlePay sandbox checkout and verification', async t => {
   const database = new PGlite();
   t.after(() => database.close());
   await setupDatabase({ query: sql => database.exec(sql) });
@@ -77,18 +71,17 @@ test('durable payment checkout, verification and webhook handling', async t => {
   let failProvider = false;
   const gateway = {
     config: () => paymentConfig(env),
-    initiate: async () => {
+    initiate: async order => {
       started++;
       if (failProvider) throw new PaymentError('PAYMENT_PROVIDER_UNAVAILABLE', 'Provider unavailable', 503);
-      return checkoutUrl;
+      return { reference: order.reference, status: 'pending', confirmationAvailable: false, gatewayCode: '120' };
     },
-    verify: async reference => transactions.get(reference) || null,
-    verifyWebhook: header => header === env.FLW_WEBHOOK_SECRET,
+    verify: async order => transactions.get(order.reference) || null,
   };
   const sendReceipt = async receipt => { if (failMail) throw new Error('SMTP unavailable'); receipts.push(receipt); };
   const service = createPaymentService({ store, gateway, sendReceipt });
-  const success = (reference, changes = {}) => ({ id: ++transactionId, tx_ref: reference,
-    amount: 90, currency: 'ZMW', status: 'successful', customer: { email: 'buyer@example.test' }, ...changes });
+  const success = (reference, changes = {}) => ({ transactionId: ++transactionId, reference,
+    amount: 90, currency: 'ZMW', status: 'successful', confirmationAvailable: true, ...changes });
 
   await t.test('client prices are ignored, duplicate requests share one checkout, and records survive service recreation', async () => {
     const request = input();
@@ -114,26 +107,24 @@ test('durable payment checkout, verification and webhook handling', async t => {
     }
   });
 
-  await t.test('verification rejects altered reference, currency, amount, transaction ID and buyer', async () => {
+  await t.test('verification rejects altered reference, currency, amount, transaction ID and unverified completion', async () => {
     const request = input();
     const order = await service.initiate(request);
-    for (const change of [{ tx_ref: 'another-order' }, { currency: 'USD' }, { amount: 1 }, { amount: 90.001 },
-      { id: 'invalid' }, { id: 0 }, { customer: { email: 123 } }, { customer: { email: 'other@example.test' } }]) {
+    for (const change of [{ reference: 'another-order' }, { currency: 'USD' }, { amount: 1 }, { amount: 90.001 },
+      { transactionId: 'invalid' }, { transactionId: 0 }, { confirmationAvailable: false }]) {
       transactions.set(order.reference, success(order.reference, change));
       await assert.rejects(service.verify(order.reference, request.idempotencyKey), { code: 'PAYMENT_MISMATCH' });
       assert.equal((await store.findByReference(order.reference)).payment_status, 'pending');
     }
   });
 
-  await t.test('only provider verification can mark paid, repeated callbacks send one receipt, and paid never downgrades', async () => {
+  await t.test('only verified terminal data can mark paid, concurrent checks send one receipt, and paid never downgrades', async () => {
     const request = input();
     const order = await service.initiate(request);
-    await assert.rejects(service.webhook('forged', { event: 'charge.completed', data: { tx_ref: order.reference, status: 'successful' } }), { code: 'INVALID_WEBHOOK' });
-    await service.webhook(env.FLW_WEBHOOK_SECRET, { event: 'charge.completed', data: { tx_ref: order.reference, status: 'successful' } });
     assert.equal((await store.findByReference(order.reference)).payment_status, 'pending');
     transactions.set(order.reference, success(order.reference));
     const before = receipts.length;
-    await Promise.all([service.verify(order.reference, request.idempotencyKey), service.webhook(env.FLW_WEBHOOK_SECRET, { event: 'charge.completed', data: { tx_ref: order.reference } })]);
+    await Promise.all([service.verify(order.reference, request.idempotencyKey), service.verify(order.reference, request.idempotencyKey)]);
     const result = await service.verify(order.reference, request.idempotencyKey);
     assert.equal(result.paymentStatus, 'paid');
     assert.equal(result.emailSent, true);
@@ -185,7 +176,7 @@ test('durable payment checkout, verification and webhook handling', async t => {
     finally { await database.exec('RESET ROLE'); }
   });
 
-  await t.test('HTTP endpoints initiate, authorize verification and authenticate webhooks', async () => {
+  await t.test('HTTP endpoints authorize verification and do not trust browser status or callbacks', async () => {
     const app = express();
     app.use(express.json());
     app.use('/api/payments', createPaymentsRouter({ service }));
@@ -204,8 +195,7 @@ test('durable payment checkout, verification and webhook handling', async t => {
       transactions.set(order.reference, success(order.reference));
       const verified = await post('/' + order.reference + '/verify', { status: 'failed' }, { Authorization: 'Bearer ' + request.idempotencyKey });
       assert.equal((await verified.json()).data.paymentStatus, 'paid');
-      assert.equal((await post('/webhook', { event: 'charge.completed' })).status, 401);
-      assert.equal((await post('/webhook', { event: 'irrelevant' }, { 'verif-hash': env.FLW_WEBHOOK_SECRET })).status, 200);
+      assert.equal((await post('/webhook', { event: 'charge.completed' })).status, 404);
     } finally {
       await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
     }

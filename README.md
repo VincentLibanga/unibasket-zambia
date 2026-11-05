@@ -1,6 +1,6 @@
 # UniBasket Zambia
 
-This project includes a product catalogue, shopping basket, browser-saved demonstration accounts, unpaid email orders and Flutterwave hosted payment integration. It uses HTML, CSS and JavaScript with a Node.js 24 LTS and Express 5 backend connected to Supabase Postgres through `pg` (node-postgres).
+This project includes a product catalogue, shopping basket, browser-saved demonstration accounts, email order receipts and ZynlePay sandbox payments. It uses HTML, CSS and JavaScript with a Node.js 24 LTS and Express 5 backend connected to PostgreSQL through `pg` (node-postgres).
 
 ## Included work
 
@@ -17,13 +17,13 @@ This project includes a product catalogue, shopping basket, browser-saved demons
 - Route-based marketplace views for Home, Products, Categories, Account, Seller and Basket
 - Supabase Postgres schema, repeatable seed data and setup command
 
-Buyer and seller accounts and listings remain browser-only demonstrations. Checkout offers Flutterwave hosted payment for shared catalogue items and a separate unpaid email-order option. Online payment amounts come from the database, payment records are durable, and only server verification can mark an order paid. Payment integration defaults to test mode and requires provider credentials and database setup; see [PAYMENT_SETUP.md](PAYMENT_SETUP.md). During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Seller listings are saved in the current browser and appear in the catalogue for that browser; they can use the unpaid email-order option.
+Buyer and seller accounts and listings remain browser-only demonstrations. Checkout offers ZynlePay sandbox mobile-money requests for shared catalogue items and a separate unpaid email-order option. Sandbox amounts come from the database and payment records are durable. The restored gateway adapter keeps status responses unconfirmed until the provider's successful terminal response contract is verified; it never assumes a submitted request is paid. Email order receipts remain available independently. See [PAYMENT_SETUP.md](PAYMENT_SETUP.md). During registration, a user selects either Buyer account or Seller account. The account page lets the user update their displayed name. Seller listings are saved in the current browser and appear in the catalogue for that browser; they can use the unpaid email-order option.
 
 The catalogue images are stored in `public/images/products`, so they display without a live image service. Fifty-two user-supplied AI-generated images have been matched to catalogue items and resized for web display. The remaining items retain representative licensed photos. The UniBasket product brand names are fictional; images illustrate the product type and do not claim to show that exact brand or package. Image provenance and available license details are listed in `PHOTO_CREDITS.md` and linked from the website footer. Sellers can upload a photo when publishing a listing; their listing and its photo are stored only in the current browser.
 
 The navigation uses page routes such as `?page=products`, `?page=categories`, `?page=account` and `?page=basket`, so the site behaves as one connected marketplace while each public area has its own URL state. Seller tools are shown only to accounts registered as sellers.
 
-Browser-saved accounts are tied to the exact site origin, including its port. An account created at `127.0.0.1:4176` is not available at `127.0.0.1:4178`; use the same address and port when returning to an account. Online payments resume in the same browser tab using a private request key in session storage. Gateway credentials stay on the server.
+Browser-saved accounts are tied to the exact site origin, including its port. An account created at `127.0.0.1:4176` is not available at `127.0.0.1:4178`; use the same address and port when returning to an account. ZynlePay sandbox requests resume in the same browser tab using a private request key in session storage. Gateway credentials stay on the server.
 
 Successful sign-in and registration return to the home page and close the account panel. The basket stays available on small screens, with quantity controls, item removal and a checkout summary that remains visible while items scroll. A saved unfinished email confirmation can also be resumed from an empty basket.
 

@@ -138,7 +138,7 @@ export function buildOrderReceipt(receipt) {
   const paid = receipt.paymentStatus === 'paid';
   const test = paid && receipt.paymentMode === 'test';
   const paymentStatus = paid
-    ? test ? 'Paid (test). No real money was collected.' : 'Paid. Payment verified through Flutterwave.'
+    ? test ? 'Paid (test). No real money was collected.' : `Paid. Payment verified through ${receipt.paymentProvider || 'the payment provider'}.`
     : 'Unpaid. No payment was collected.';
   const paymentReference = paid ? `Payment reference: ${receipt.paymentRef}\n` : '';
   const receiptNote = paid

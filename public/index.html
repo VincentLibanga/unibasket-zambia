@@ -672,9 +672,10 @@
           /></label>
           <p id="checkoutError" class="form-error" hidden></p>
           <p id="orderStatus" class="fine-print" role="status" aria-live="polite" hidden></p>
-          <p id="onlinePaymentNote" class="fine-print" role="status">Pay securely through Flutterwave, or place an unpaid order below.</p>
+          <label>ZynlePay sandbox mobile number<input id="paymentPhone" type="tel" autocomplete="tel" placeholder="097 000 0000" maxlength="24" /><small>Use a number enabled in your ZynlePay sandbox simulator. Optional for email orders.</small></label>
+          <p id="onlinePaymentNote" class="fine-print" role="status">Try ZynlePay sandbox, or place an unpaid order by email below.</p>
           <button id="onlinePaymentSubmit" class="primary-button full-button" type="button" onclick="submitOnlinePayment()">
-            Pay online
+            Pay with ZynlePay · Sandbox
           </button>
           <button id="checkoutSubmit" class="ghost-button full-button" type="submit">
             Place order &amp; email receipt
@@ -699,7 +700,7 @@
           </p>
           <div id="paymentActions" class="payment-actions" hidden>
             <button id="checkPaymentButton" class="primary-button full-button" type="button" onclick="checkOnlinePayment()">Check payment status</button>
-            <button id="resumePaymentButton" class="ghost-button full-button" type="button" onclick="continueOnlinePayment()" hidden>Continue payment</button>
+            <button id="emailInsteadButton" class="ghost-button full-button" type="button" onclick="openEmailCheckout()">Email an unpaid order confirmation</button>
             <button id="newPaymentButton" class="ghost-button full-button" type="button" onclick="finishFailedPayment()" hidden>Return to basket</button>
           </div>
           <button
@@ -713,7 +714,7 @@
       </section>
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    <script src="script.js?v=21"></script>
-    <script src="payments.js?v=1"></script>
+    <script src="script.js?v=22"></script>
+    <script src="payments.js?v=2"></script>
   </body>
 </html>

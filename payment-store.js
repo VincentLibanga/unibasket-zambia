@@ -14,9 +14,14 @@ export function createPaymentStore({ query = queryDatabase } = {}) {
     },
     claimCheckout: reference => one(`UPDATE public.payment_orders SET initialization = 'starting'
       WHERE reference = $1 AND initialization = 'new' RETURNING reference`, [reference]),
-    saveCheckout: (reference, url) => query("UPDATE public.payment_orders SET checkout_url = $2, initialization = 'ready' WHERE reference = $1", [reference, url]),
+    saveGatewayState: (reference, state) => query(`UPDATE public.payment_orders
+      SET initialization = 'ready', details = details || $2::jsonb,
+      transaction_id = COALESCE($3, transaction_id) WHERE reference = $1`,
+    [reference, JSON.stringify({ gatewayCode: state.gatewayCode, confirmationAvailable: state.confirmationAvailable }), state.transactionId || null]),
     uncertainCheckout: reference => query("UPDATE public.payment_orders SET initialization = 'uncertain' WHERE reference = $1", [reference]),
-    rejectCheckout: reference => query("UPDATE public.payment_orders SET payment_status = 'failed', initialization = 'uncertain' WHERE reference = $1 AND payment_status <> 'paid'", [reference]),
+    rejectCheckout: (reference, error) => query(`UPDATE public.payment_orders SET payment_status = 'failed', initialization = 'uncertain',
+      details = details || $2::jsonb WHERE reference = $1 AND payment_status <> 'paid'`,
+    [reference, JSON.stringify({ failureCode: error.code, failureMessage: error.message })]),
     recordVerification: (reference, status, transactionId) => one(`UPDATE public.payment_orders
       SET payment_status = $2, transaction_id = $3, verified_at = CURRENT_TIMESTAMP
       WHERE reference = $1 AND payment_status <> 'paid' RETURNING *`, [reference, status, transactionId]),

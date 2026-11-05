@@ -893,8 +893,8 @@ function deliveryCharge() {
   return method === "pickup" ? 0 : method === "courier" ? 50 : 25;
 }
 
-function openCheckout() {
-  if (typeof hasPendingOnlinePayment === "function" && hasPendingOnlinePayment()) {
+function openCheckout({ emailOnly = false } = {}) {
+  if (!emailOnly && typeof hasPendingOnlinePayment === "function" && hasPendingOnlinePayment()) {
     resumeOnlinePayment();
     return;
   }

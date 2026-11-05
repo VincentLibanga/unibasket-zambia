@@ -12,10 +12,6 @@ export function createPaymentsRouter({ service = createPaymentService() } = {}) 
   router.post('/initiate', async (request, response) => response.status(201).json({ data: await service.initiate(request.body) }));
   router.get('/:reference', async (request, response) => response.json({ data: await service.status(request.params.reference, key(request)) }));
   router.post('/:reference/verify', async (request, response) => response.json({ data: await service.verify(request.params.reference, key(request)) }));
-  router.post('/webhook', async (request, response) => {
-    await service.webhook(request.get('verif-hash'), request.body);
-    response.sendStatus(200);
-  });
   router.use((error, _request, response, _next) => {
     if (error instanceof PaymentError || error instanceof OrderError) {
       response.status(error.status).json({ error: { code: error.code, message: error.message } });
