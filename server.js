@@ -78,17 +78,17 @@ app.listen(port, host, () => {
 
 try {
   await verifyDatabase();
-  console.log('[db] MySQL connection verified.');
+  console.log('[db] Supabase Postgres connection and catalogue tables verified.');
 } catch (error) {
-  console.error('[db] UniBasket could not connect to MySQL. Run npm run db:setup and check .env.');
+  console.error('[db] UniBasket could not connect to Supabase. Set DATABASE_URL in .env and run npm run db:setup.');
   console.error(`[db] ${error.message}`);
-  console.error('[db] The site will use its local preview catalogue until MySQL is available.');
+  console.error('[db] The site will use its local preview catalogue until Supabase is available.');
 }
 
 if (!isMailConfigured()) {
-  console.warn('[mail] Gmail SMTP is not configured: set GMAIL_USER and GMAIL_APP_PASSWORD in .env. Registration emails will fail.');
+  console.warn('[mail] SMTP is not configured: check SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and MAIL_FROM in .env.');
 } else {
   verifyMail()
-    .then(() => console.log('[mail] Gmail SMTP login verified.'))
+    .then(() => console.log('[mail] SMTP connection and login verified.'))
     .catch(error => console.warn(`[mail] ${error.message}`));
 }

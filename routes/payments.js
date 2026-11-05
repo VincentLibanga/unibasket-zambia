@@ -1,16 +1,25 @@
 import { Router } from 'express';
 
 import { sendPaymentReceipt } from '../mail.js';
-import { PaymentError } from '../zynlepay.js';
+import { authenticateZynleCallback, PaymentError } from '../zynlepay.js';
 import { createPaymentService } from '../payments.js';
 
 export function createPaymentsRouter({
   service = createPaymentService({ sendReceipt: sendPaymentReceipt }),
+  callbackSecret = () => process.env.ZYNLEPAY_CALLBACK_SECRET,
 } = {}) {
   const router = Router();
   router.use((_request, response, next) => {
     response.set('Cache-Control', 'no-store');
     next();
+  });
+  router.post('/callback', (request, response, next) => {
+    try {
+      authenticateZynleCallback(request.query.token, callbackSecret());
+      response.json(service.receiveCallback(request.body));
+    } catch (error) {
+      next(error);
+    }
   });
   router.post('/checkout', (request, response, next) => {
     try {

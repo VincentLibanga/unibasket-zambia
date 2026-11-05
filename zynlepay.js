@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto';
+
 export const ZYNLEPAY_SANDBOX_URL = 'https://sandbox.zynlepay.com/zynlepay/jsonapi';
 
 export class PaymentError extends Error {
@@ -81,9 +83,59 @@ export async function requestZynlePay(data, { config = zynlepayConfig, fetchImpl
 
 export async function initiateZynlePayment(order, options) {
   return requestZynlePay({
-    method: 'runBillPayment', sender_id: normalizeMobileNumber(order.phone),
+    method: 'runBillPayment', receiver_id: normalizeMobileNumber(order.phone),
     reference_no: order.reference, amount: order.total.toFixed(2),
   }, options);
+}
+
+export function isZynleCallbackConfigured() {
+  return /^[a-f0-9]{64}$/.test(process.env.ZYNLEPAY_CALLBACK_SECRET || '');
+}
+
+export function authenticateZynleCallback(token, secret = process.env.ZYNLEPAY_CALLBACK_SECRET) {
+  if (typeof secret !== 'string' || !/^[a-f0-9]{64}$/.test(secret)) {
+    throw new PaymentError('PAYMENT_CALLBACK_NOT_CONFIGURED', 'Payment callbacks are not configured.', 503);
+  }
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token) ||
+      !timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(secret, 'hex'))) {
+    throw new PaymentError('INVALID_PAYMENT_CALLBACK_AUTH', 'The payment callback could not be authenticated.', 401);
+  }
+}
+
+export function parseZynlePaymentCallback(payload) {
+  const invalid = () => {
+    throw new PaymentError('INVALID_PAYMENT_CALLBACK', 'The payment callback is incomplete or inconsistent.');
+  };
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.isAcknowledged !== true ||
+      typeof payload.reference_no !== 'string' || !payload.reference_no || payload.reference_no.length > 100 ||
+      !['SUCCESS', 'FAILED'].includes(payload.transaction_status) ||
+      typeof payload.operator_reference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(payload.operator_reference)) invalid();
+
+  const successful = payload.transaction_status === 'SUCCESS';
+  const resultCode = payload.transaction_result?.code;
+  if (!['string', 'number'].includes(typeof resultCode) || !String(resultCode)) invalid();
+  const code = String(resultCode);
+  if ((successful && code !== '100') || (!successful && code === '100')) invalid();
+  if (!['string', 'number'].includes(typeof payload.amount) ||
+      !/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(String(payload.amount)) ||
+      !Number.isSafeInteger(Math.round(Number(payload.amount) * 100)) || Number(payload.amount) <= 0) invalid();
+  if (!['string', 'number'].includes(typeof payload.phone)) invalid();
+  let phone;
+  try {
+    phone = normalizeMobileNumber(payload.phone);
+  } catch {
+    invalid();
+  }
+  // The supplied callback has no currency field. Only the shop's ZMW sandbox
+  // contract is supported; an explicit conflicting currency is rejected.
+  if (payload.currency !== undefined && payload.currency !== 'ZMW') invalid();
+  return {
+    reference: payload.reference_no,
+    status: successful ? 'successful' : 'failed',
+    amount: String(payload.amount), currency: 'ZMW', phone,
+    operatorReference: payload.operator_reference,
+    ...(/^\d{1,6}$/.test(String(payload.response_code)) ? { gatewayCode: String(payload.response_code) } : {}),
+  };
 }
 
 export async function getZynlePaymentStatus(order, { config = zynlepayConfig, fetchImpl = fetch } = {}) {
@@ -100,9 +152,13 @@ export async function getZynlePaymentStatus(order, { config = zynlepayConfig, fe
   if (payload.reference_no !== order.reference) {
     throw new PaymentError('PAYMENT_MISMATCH', 'The payment reference does not match this checkout. Please contact the shop with your order reference.', 409);
   }
-  // The observed 995 response says completion could not be confirmed. Its terminal
-  // meaning and the success response have not been documented yet. Never infer paid
-  // status, amount, or currency from HTTP 200, a message, or the local order snapshot.
+  // If the authenticated status endpoint returns the complete terminal payload,
+  // apply the same validation as a callback. A response code alone is insufficient.
+  if (['SUCCESS', 'FAILED'].includes(payload.transaction_status)) {
+    return parseZynlePaymentCallback(payload);
+  }
+  // Code-only responses, including 995, do not supply the complete terminal
+  // contract. HTTP 200, a description, or a local order total is not proof of payment.
   return {
     reference: payload.reference_no, status: 'pending', confirmationAvailable: false,
     ...(/^\d{1,6}$/.test(String(payload.response_code)) ? { gatewayCode: String(payload.response_code) } : {}),

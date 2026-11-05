@@ -664,7 +664,7 @@ fallbackProducts.forEach((product, index) => {
   product[9] = cataloguePhoto(index + 1);
 });
 
-// The local array keeps the layout preview usable when MySQL is not running.
+// The local array keeps the layout preview usable when Supabase is unavailable.
 // The Task 3 server replaces it with the catalogue returned by the API.
 const SELLER_PRODUCT_STORE = "unibasket.sellerProducts.v1";
 let catalogueProducts = fallbackProducts;
@@ -886,7 +886,7 @@ function basketSubtotal() {
 
 function deliveryCharge() {
   const method = document.getElementById("deliveryMethod").value;
-  return method === "pickup" ? 0 : method === "courier" ? 30 : 15;
+  return method === "pickup" ? 0 : method === "courier" ? 50 : 25;
 }
 
 function openCheckout() {
@@ -928,10 +928,15 @@ function returnToCatalogue() {
 }
 
 function updateCheckoutTotal() {
+  const itemCount = pendingPayment
+    ? pendingPayment.items.reduce((sum, item) => sum + item.quantity, 0)
+    : cart.reduce((sum, item) => sum + item.q, 0);
   document.getElementById("checkoutItems").textContent =
-    cart.reduce((n, item) => n + item.q, 0) + " items";
+    itemCount + " items";
   document.getElementById("checkoutTotal").textContent =
-    "ZMW " + (basketSubtotal() + deliveryCharge()).toLocaleString();
+    pendingPayment
+      ? Number.isFinite(pendingPayment.amount) ? "ZMW " + pendingPayment.amount.toLocaleString() : "Saved payment awaiting verification"
+      : "ZMW " + (basketSubtotal() + deliveryCharge()).toLocaleString();
 }
 
 async function submitCheckout() {
@@ -980,9 +985,10 @@ async function submitCheckout() {
     });
     pendingPayment = {
       reference: checkout.reference, token: checkout.token,
-      name: checkout.name, email: checkout.email, items: basket,
+      name: checkout.name, email: checkout.email, amount: checkout.amount, items: basket,
     };
     savePendingPayment();
+    updateCheckoutTotal();
     showPaymentStatus("Submitting your mobile-money test request to ZynlePay…");
     const result = await paymentApi("/initiate", { reference: pendingPayment.reference, token: pendingPayment.token });
     if (!applyPaymentResult(result)) await confirmZynlePayment();
@@ -1060,6 +1066,7 @@ function applyPaymentResult(order) {
   if (order.status === "failed") {
     pendingPayment = null;
     savePendingPayment();
+    updateCheckoutTotal();
     document.getElementById("paymentStatus").hidden = true;
     throw new Error(order.message || "The test payment was declined. Your basket is unchanged.");
   }

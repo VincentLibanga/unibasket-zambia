@@ -10,14 +10,14 @@ const input = {
   items: [{ name: 'Notebook', price: 65, quantity: 1 }],
 };
 const verifiedCollection = order => ({
-  reference: order.reference, currency: 'ZMW', amount: '80.00', status: 'successful', transactionId: 'ZYNLEPAY-123',
+  reference: order.reference, currency: 'ZMW', amount: '90.00', status: 'successful', transactionId: 'ZYNLEPAY-123',
 });
 
 function serviceWith(overrides = {}) {
   const receipts = [];
   const requests = [];
   const service = createPaymentService({
-    config: () => ({ apiKey: 'test-secret' }),
+    config: () => ({ apiKey: 'test-secret' }), callbacksEnabled: () => false,
     getStatus: null,
     initiatePayment: async order => { requests.push(order.reference); return { response_code: 'UNCONFIRMED-TEST', reference_no: order.reference }; },
     sendReceipt: async receipt => { receipts.push(receipt); }, onMailError: () => {},
@@ -35,7 +35,7 @@ async function started(service, details = input) {
 test('checkout snapshots total and saves a reference before any gateway submission', () => {
   const { service, requests, receipts } = serviceWith();
   const checkout = service.create(input);
-  assert.equal(checkout.amount, 80);
+  assert.equal(checkout.amount, 90);
   assert.equal(checkout.currency, 'ZMW');
   assert.equal(checkout.status, 'created');
   assert.match(checkout.reference, /^UBZ-[A-F0-9]{32}$/);
@@ -47,7 +47,7 @@ test('checkout snapshots total and saves a reference before any gateway submissi
 test('totals use whole cents and server delivery charges', () => {
   const { service } = serviceWith();
   const checkout = service.create({ ...input, deliveryMethod: 'courier', items: [{ name: 'Pen', price: 0.1, quantity: 3 }] });
-  assert.equal(checkout.amount, 30.3);
+  assert.equal(checkout.amount, 50.3);
   assert.throws(() => service.create({ ...input, items: [{ name: 'Pen', price: 0.001, quantity: 1 }] }), { code: 'INVALID_PAYMENT_DETAILS' });
   assert.throws(() => service.create({ ...input, items: [{ name: 'Pen', price: 10, quantity: -1 }] }), { code: 'INVALID_PAYMENT_DETAILS' });
   assert.throws(() => service.create({ ...input, paymentMethod: 'card' }), { code: 'INVALID_PAYMENT_DETAILS' });

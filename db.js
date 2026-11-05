@@ -1,30 +1,29 @@
-import mysql from 'mysql2/promise';
+import pg from 'pg';
 
-const requiredVariables = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
-const missingVariables = requiredVariables.filter((name) => !process.env[name]);
+import { databaseConfig } from './database/config.js';
 
-if (missingVariables.length) {
-  throw new Error(`Missing database environment variables: ${missingVariables.join(', ')}`);
+let pool;
+
+export async function queryDatabase(text, parameters) {
+  // Connect lazily so the static preview can still run before Supabase is configured.
+  if (!pool) {
+    pool = new pg.Pool(databaseConfig());
+    pool.on('error', error => {
+      console.error('[db] Supabase idle connection error:', error.code || 'CONNECTION_ERROR');
+    });
+  }
+  return pool.query(text, parameters);
 }
 
-export const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  charset: 'utf8mb4',
-  decimalNumbers: true,
-});
-
 export async function verifyDatabase() {
-  const connection = await pool.getConnection();
-  try {
-    await connection.query('SELECT 1');
-  } finally {
-    connection.release();
+  // Verify the application tables as well as the connection.
+  await queryDatabase('SELECT id FROM public.categories LIMIT 1');
+  await queryDatabase('SELECT id FROM public.products LIMIT 1');
+}
+
+export async function closeDatabase() {
+  if (pool) {
+    await pool.end();
+    pool = undefined;
   }
 }

@@ -1,28 +1,36 @@
 import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 
-import mysql from 'mysql2/promise';
+import pg from 'pg';
 
-const requiredVariables = ['DB_HOST', 'DB_USER', 'DB_PASSWORD'];
-const missingVariables = requiredVariables.filter((name) => !process.env[name]);
-if (missingVariables.length) {
-  throw new Error(`Missing database environment variables: ${missingVariables.join(', ')}`);
-}
+import { databaseConfig } from './config.js';
 
-const connection = await mysql.createConnection({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  multipleStatements: true,
-  charset: 'utf8mb4',
-});
-
-try {
+export async function setupDatabase(client) {
   const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
   const seed = await readFile(new URL('./seed.sql', import.meta.url), 'utf8');
-  await connection.query(schema);
-  await connection.query(seed);
-  console.log('UniBasket database schema and 72-product seed completed.');
-} finally {
-  await connection.end();
+
+  await client.query('BEGIN');
+  try {
+    await client.query(schema);
+    await client.query(seed);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let client;
+  try {
+    client = new pg.Client(databaseConfig());
+    await client.connect();
+    await setupDatabase(client);
+    console.log('Supabase Postgres schema, five categories and 72 products are ready.');
+  } catch (error) {
+    console.error('[db] Supabase setup failed:', error.message);
+    process.exitCode = 1;
+  } finally {
+    if (client) await client.end();
+  }
 }

@@ -6,7 +6,7 @@ import { getZynlePaymentStatus, initiateZynlePayment, normalizeMobileNumber, req
 const config = () => ({ merchantId: 'MEC-TEST', apiId: 'test-id', apiKey: 'test-secret', apiUrl: ZYNLEPAY_SANDBOX_URL });
 const order = { reference: 'UBZ-TEST', phone: '097 000 0000', total: 80 };
 
-test('Zambian mobile numbers normalize to the sender_id format', () => {
+test('Zambian mobile numbers normalize to the receiver_id format', () => {
   for (const phone of ['097 000 0000', '+260970000000', '260970000000']) assert.equal(normalizeMobileNumber(phone), '260970000000');
   assert.throws(() => normalizeMobileNumber('not-a-number'), { code: 'INVALID_PAYMENT_DETAILS' });
   assert.throws(() => normalizeMobileNumber('233240000000'), { code: 'INVALID_PAYMENT_DETAILS' });
@@ -18,7 +18,7 @@ test('mobile money request uses the supplied ZynlePay JSON contract', async () =
     assert.equal(options.redirect, 'error');
     assert.deepEqual(JSON.parse(options.body), {
       auth: { merchant_id: 'MEC-TEST', api_id: 'test-id', api_key: 'test-secret', channel: 'momo' },
-      data: { method: 'runBillPayment', sender_id: '260970000000', reference_no: 'UBZ-TEST', amount: '80.00' },
+      data: { method: 'runBillPayment', receiver_id: '260970000000', reference_no: 'UBZ-TEST', amount: '80.00' },
     });
     return { ok: true, json: async () => ({ response_code: 'PENDING-TEST', reference_no: 'UBZ-TEST' }) };
   } });
@@ -88,7 +88,7 @@ test('status query uses the documented separate endpoint and flat credentials', 
 });
 
 test('undocumented status codes and messages never establish payment or leak credentials', async () => {
-  for (const response_code of ['120', 200, '00', 'SUCCESS', '2000']) {
+  for (const response_code of ['120', '130', 200, '00', 'SUCCESS', '2000']) {
     const result = await getZynlePaymentStatus(order, { config, fetchImpl: async () => ({ ok: true, json: async () => ({
       response_code, reference_no: order.reference, status: 'successful', amount: '80.00', currency: 'ZMW', message: 'test-secret',
     }) }) });

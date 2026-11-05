@@ -21,7 +21,7 @@ async function checkoutScenario(currentUser, enteredName, {
   const elements = Object.fromEntries([
     'checkoutError', 'checkoutName', 'confirmationName', 'orderId', 'paymentRef',
     'paymentMethodPaid', 'orderTotal', 'receiptStatus', 'checkoutForm', 'checkoutSuccess',
-    'count', 'checkoutSubmit', 'checkoutPhone', 'paymentMethod', 'deliveryMethod', 'deliveryNote', 'paymentStatus'
+    'count', 'checkoutSubmit', 'checkoutPhone', 'paymentMethod', 'deliveryMethod', 'deliveryNote', 'paymentStatus', 'checkoutItems', 'checkoutTotal'
   ].map(id => [id, { textContent: '', hidden: false, value: '' }]));
   elements.checkoutName.value = enteredName;
   elements.checkoutName.focus = () => {};
@@ -49,7 +49,7 @@ async function checkoutScenario(currentUser, enteredName, {
         sentBody = JSON.parse(options.body);
         return { ok: true, json: async () => ({ data: {
           reference: 'UBZ-TEST', token: 'a'.repeat(64), name: currentUser.name, email: currentUser.email,
-          amount: 80, currency: 'ZMW', status: 'created',
+          amount: 90, currency: 'ZMW', status: 'created',
         } }) };
       }
       if (url.endsWith('/initiate')) {
@@ -65,7 +65,7 @@ async function checkoutScenario(currentUser, enteredName, {
         ok: true,
         json: async () => ({ data: {
           status, confirmationAvailable, gatewayCode, name: currentUser.name, email: currentUser.email,
-          orderId: 'UBZ-TEST', paymentRef: gatewayTransactionId || 'ZYNLEPAY-TEST', paymentMethod: 'Mobile money via ZynlePay', total: 80, emailSent: true
+          orderId: 'UBZ-TEST', paymentRef: gatewayTransactionId || 'ZYNLEPAY-TEST', paymentMethod: 'Mobile money via ZynlePay', total: 90, emailSent: true
         } })
       };
     },
@@ -73,7 +73,8 @@ async function checkoutScenario(currentUser, enteredName, {
   };
   elements.checkoutSuccess.hidden = true;
   const functions = ['submitCheckout', 'paymentApi', 'setCheckoutBusy', 'showPaymentStatus',
-    'savePendingPayment', 'confirmZynlePayment', 'applyPaymentResult', 'showCheckoutConfirmation'].map(functionSource).join('\n');
+    'savePendingPayment', 'confirmZynlePayment', 'applyPaymentResult', 'showCheckoutConfirmation', 'updateCheckoutTotal',
+    'basketSubtotal', 'deliveryCharge'].map(functionSource).join('\n');
   await vm.runInNewContext(`${functions}\nsubmitCheckout();`, context);
   return { elements, sentBody, calls, context, storage };
 }
@@ -105,7 +106,7 @@ test('order confirmation uses the signed-in profile name', async () => {
   assert.deepEqual(sentBody.items, [{ name: 'Oats', price: 65, quantity: 1 }]);
   assert.equal(elements.confirmationName.textContent, 'Thank you, Vince Buyer.');
   assert.equal(elements.checkoutSuccess.hidden, false);
-  assert.equal(elements.orderTotal.textContent, 'ZMW 80');
+  assert.equal(elements.orderTotal.textContent, 'ZMW 90');
   assert.equal(elements.paymentMethodPaid.textContent, 'Mobile money via ZynlePay');
   assert.match(elements.receiptStatus.textContent, /receipt has been emailed to buyer@example.test/);
 });
@@ -125,6 +126,30 @@ test('pending ZynlePay payment preserves the basket and offers a status check', 
   assert.equal(elements.checkoutSubmit.textContent, 'Check payment status');
   assert.equal(elements.checkoutPhone.disabled, true);
   assert.equal(storage.size, 1);
+  assert.equal(context.pendingPayment.amount, 90);
+  assert.equal(elements.checkoutTotal.textContent, 'ZMW 90');
+});
+
+test('a restored pending payment shows its original total and quantity after the cart is cleared', () => {
+  const elements = { checkoutItems: {}, checkoutTotal: {} };
+  const context = {
+    pendingPayment: { amount: 90, items: [{ id: 1, quantity: 1 }] }, cart: [],
+    document: { getElementById: id => elements[id] },
+  };
+  vm.runInNewContext(`${functionSource('updateCheckoutTotal')}\nupdateCheckoutTotal();`, context);
+  assert.equal(elements.checkoutItems.textContent, '1 items');
+  assert.equal(elements.checkoutTotal.textContent, 'ZMW 90');
+});
+
+test('a failed pending payment restores the current basket total before another payment', async () => {
+  const { elements, context } = await checkoutScenario({ name: 'Test Buyer', email: 'buyer@example.test' }, '', {
+    statuses: ['pending'], confirmationAvailable: false,
+  });
+  context.cart[0].q = 2;
+  vm.runInNewContext('try { applyPaymentResult({ status: "failed" }); } catch {}', context);
+  assert.equal(context.pendingPayment, null);
+  assert.equal(elements.checkoutTotal.textContent, 'ZMW 155');
+  assert.equal(elements.checkoutItems.textContent, '2 items');
 });
 
 test('declined and rejected credentials keep the basket and allow retry', async () => {

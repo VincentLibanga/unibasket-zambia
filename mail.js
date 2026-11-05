@@ -10,82 +10,102 @@ export class MailError extends Error {
   }
 }
 
-let transporter = null;
-
-function readMailConfig() {
-  const user = (process.env.GMAIL_USER || '').trim();
-  // Google displays App Passwords in groups of four ("abcd efgh ijkl mnop"); SMTP needs them without spaces.
-  const pass = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
-  const from = (process.env.MAIL_FROM || '').trim() || (user ? `UniBasket Zambia <${user}>` : '');
+export function readMailConfig(env = process.env) {
+  // Select one complete credential set. Never send legacy Gmail credentials to
+  // a custom SMTP host when only part of a new provider's config has been entered.
+  const custom = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD']
+    .some(name => Boolean(env[name]));
+  const legacy = !custom && (!env.MAIL_HOST || env.MAIL_HOST.trim() === 'smtp.gmail.com');
+  const host = custom ? (env.SMTP_HOST || '').trim() : legacy ? 'smtp.gmail.com' : (env.MAIL_HOST || '').trim();
+  const user = custom ? (env.SMTP_USER || '').trim() : legacy ? (env.GMAIL_USER || '').trim() : '';
+  // Only the legacy Google App Password is normalized. Other SMTP passwords may
+  // legitimately contain spaces and have lengths other than 16 characters.
+  const pass = custom ? (env.SMTP_PASSWORD || '') : legacy ? (env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '') : '';
+  const secureValue = (env.SMTP_SECURE || '').trim().toLowerCase();
+  const port = Number(env.SMTP_PORT || (legacy || secureValue === 'true' ? 465 : 587));
+  const secure = secureValue ? secureValue === 'true' : port === 465;
+  const from = (env.MAIL_FROM || '').trim() || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user) ? `UniBasket Zambia <${user}>` : '');
   const missing = [];
-  if (!user || user === 'your-account@gmail.com') missing.push('GMAIL_USER');
-  if (!pass || pass === 'your-16-character-app-password') missing.push('GMAIL_APP_PASSWORD');
-  return { user, pass, from, missing };
-}
-
-export function isMailConfigured() {
-  return readMailConfig().missing.length === 0;
-}
-
-function getTransporter() {
-  if (transporter) return transporter;
-  const { user, pass, missing } = readMailConfig();
-  if (missing.length) {
-    throw new MailError('MAIL_NOT_CONFIGURED',
-      `Gmail SMTP is not configured. Set ${missing.join(' and ')} in .env and restart the server.`);
+  const invalid = [];
+  if (!host) missing.push('SMTP_HOST');
+  if (!user || user === 'your-account@gmail.com') missing.push(custom || !legacy ? 'SMTP_USER' : 'GMAIL_USER');
+  if (!pass || pass === 'your-16-character-app-password') missing.push(custom || !legacy ? 'SMTP_PASSWORD' : 'GMAIL_APP_PASSWORD');
+  if (!from) missing.push('MAIL_FROM');
+  if (host && (/\s/.test(host) || host.includes('://'))) invalid.push('SMTP_HOST must be a hostname without a URL scheme');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) invalid.push('SMTP_PORT must be a port number from 1 to 65535');
+  if (secureValue && !['true', 'false'].includes(secureValue)) invalid.push('SMTP_SECURE must be true or false');
+  if (legacy && pass && pass !== 'your-16-character-app-password' && pass.length !== 16) {
+    invalid.push('GMAIL_APP_PASSWORD must be a 16-character Google App Password');
   }
-  if (pass.length !== 16) {
-    throw new MailError('MAIL_NOT_CONFIGURED',
-      'GMAIL_APP_PASSWORD must be the 16-character Google App Password, not your normal Gmail password.');
-  }
-  transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: { user, pass },
-    connectionTimeout: 15000,
-    greetingTimeout: 10000,
-    socketTimeout: 20000,
-  });
-  return transporter;
+  return { host, port, secure, user, pass, from, missing, invalid };
 }
 
 function toMailError(error) {
   if (error instanceof MailError) return error;
   if (error.code === 'EAUTH' || error.responseCode === 535 || error.responseCode === 534) {
-    transporter = null;
     return new MailError('MAIL_AUTH_FAILED',
-      'Gmail rejected the login. Check GMAIL_USER and that GMAIL_APP_PASSWORD is a valid App Password (2-Step Verification must be on).',
+      'The SMTP server rejected the login. Check the SMTP username and password or provider app password in .env.',
       { cause: error });
   }
-  if (['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'EDNS', 'ECONNREFUSED'].includes(error.code)) {
-    transporter = null;
+  if (['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'EDNS', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(error.code)) {
     return new MailError('MAIL_UNREACHABLE',
-      'The server could not reach smtp.gmail.com. Check the internet connection or firewall (port 465).',
+      'The SMTP server could not be reached. Check SMTP_HOST, SMTP_PORT, TLS settings and the network connection.',
       { cause: error });
   }
   if (error.responseCode >= 500 && error.responseCode < 600) {
-    return new MailError('MAIL_REJECTED', 'Gmail refused to deliver the message to that address.', { cause: error });
+    return new MailError('MAIL_REJECTED', 'The SMTP server refused to deliver the message. Check the sender and recipient addresses.', { cause: error });
   }
-  return new MailError('MAIL_FAILED', 'The confirmation email could not be sent.', { cause: error });
+  return new MailError('MAIL_FAILED', 'The email could not be sent.', { cause: error });
 }
 
-export async function verifyMail() {
-  try {
-    await getTransporter().verify();
-  } catch (error) {
-    throw toMailError(error);
+export function createMailService({ env = () => process.env, createTransport = options => nodemailer.createTransport(options) } = {}) {
+  let transporter;
+
+  function config() {
+    const value = readMailConfig(env());
+    const issues = [
+      ...(value.missing.length ? [`Set ${value.missing.join(', ')} in .env`] : []),
+      ...value.invalid,
+    ];
+    if (issues.length) throw new MailError('MAIL_NOT_CONFIGURED', issues.join('. ') + '.');
+    return value;
   }
+
+  function transport(value) {
+    if (!transporter) transporter = createTransport({
+      host: value.host, port: value.port, secure: value.secure,
+      requireTLS: !value.secure,
+      auth: { user: value.user, pass: value.pass },
+      tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
+      connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 20000,
+    });
+    return transporter;
+  }
+
+  async function perform(operation) {
+    try {
+      const value = config();
+      return await operation(transport(value), value);
+    } catch (error) {
+      transporter = undefined;
+      throw toMailError(error);
+    }
+  }
+
+  return {
+    isConfigured: () => {
+      const value = readMailConfig(env());
+      return value.missing.length === 0 && value.invalid.length === 0;
+    },
+    verify: () => perform(client => client.verify()),
+    send: message => perform((client, value) => client.sendMail({ ...message, from: value.from })),
+  };
 }
 
-export async function sendMail(message) {
-  const { from } = readMailConfig();
-  try {
-    return await getTransporter().sendMail({ from, ...message });
-  } catch (error) {
-    throw toMailError(error);
-  }
-}
+const mailService = createMailService();
+export const isMailConfigured = () => mailService.isConfigured();
+export const verifyMail = () => mailService.verify();
+export const sendMail = message => mailService.send(message);
 
 export async function sendAccountConfirmation({ email, name }) {
   return sendMail({

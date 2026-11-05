@@ -1,6 +1,6 @@
 import { sendMail, verifyMail } from '../mail.js';
 
-const to = process.argv[2] || process.env.GMAIL_USER;
+const to = process.argv[2];
 if (!to) {
   console.error('Usage: npm run mail:test -- recipient@example.com');
   process.exit(1);
@@ -8,11 +8,11 @@ if (!to) {
 
 try {
   await verifyMail();
-  console.log('Gmail SMTP login verified.');
+  console.log('SMTP connection and login verified.');
   const info = await sendMail({
     to,
     subject: 'UniBasket Zambia SMTP test',
-    text: 'If you can read this, Gmail SMTP is working for UniBasket Zambia.',
+    text: 'If you can read this, SMTP email is working for UniBasket Zambia.',
   });
   console.log(`Test email sent to ${to} (${info.messageId}).`);
 } catch (error) {
